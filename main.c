@@ -10,12 +10,15 @@
 #include "driverlib/pin_map.h"
 #include "driverlib/timer.h"
 #include "driverlib/adc.h"
+#include "utils/ustdlib.h"
 #include "init.h"
 #include "fatfs/ff.h"
 
  #define RED_LED   GPIO_PIN_1
  #define BLUE_LED  GPIO_PIN_2
  #define GREEN_LED GPIO_PIN_3
+
+#define FILE_NAME_BUFFER_SIZE  32
 
 typedef enum
 {
@@ -24,9 +27,16 @@ typedef enum
 	SendData,
 }FallSensorStates;
 
+typedef enum
+{
+	CREATE_OPEN_NEW_FILE,
+	CLOSE_SEND_FILE = SAVING_DATA_COUNT
+}SavingState;
 
 unsigned long soundValuesBuff1[BUFFER_SIZE];
 unsigned long soundValuesBuff2[BUFFER_SIZE];
+
+char FileName[FILE_NAME_BUFFER_SIZE];
 
 unsigned long *buff = NULL;
 unsigned int transfers = 0;
@@ -72,38 +82,51 @@ void Adc0_1_ISR(void)
 }
 void SaveSensorsData()
 {
-	static unsigned long savingDataCount = 0;
-	unsigned long *buffToSave = NULL;
+	static SavingState savingState = CREATE_OPEN_NEW_FILE;
+	static unsigned long *buffToSave = NULL;
+	static unsigned int fileID = 0;
+	UINT bw = 0;
 
-	re = f_open(&Fil, "datalog.txt", FA_WRITE | FA_OPEN_ALWAYS );
-	if( re == FR_OK)
+	switch( savingState )
 	{
-		UINT bw = 0;
-		if( buff == soundValuesBuff1 )
-		{
-			buffToSave = soundValuesBuff2;
-		}
-		else if( buff == soundValuesBuff2 )
-		{
-			buffToSave = soundValuesBuff1;
-		}
+	case CREATE_OPEN_NEW_FILE:
 
-		re = f_write(&Fil, buffToSave, sizeof(unsigned long)*BUFFER_SIZE, &bw);
+		usnprintf(FileName,FILE_NAME_BUFFER_SIZE,"S%05d.txt",fileID);
+		re = f_open(&Fil, FileName, FA_WRITE | FA_OPEN_ALWAYS );
+		if( re == FR_OK )
+		{
+			savingState++;
+			fileID++;
+			if( buff == soundValuesBuff1 )
+			{
+				buffToSave = soundValuesBuff2;
+			}
+			else if( buff == soundValuesBuff2 )
+			{
+				buffToSave = soundValuesBuff1;
+			}
+		}
+		break;
+	case CLOSE_SEND_FILE:
 		re = f_close(&Fil);
-	}
-	savingDataCount++;
-	if( savingDataCount == SAVING_DATA_COUNT )
-	{
-		State = SendData;
-		savingDataCount = 0;
-		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, GREEN_LED);
-	}
-	else
-	{
+		if( re == FR_OK )
+		{
+			State = SendData;
+			savingState = CREATE_OPEN_NEW_FILE;
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, GREEN_LED);
+		}
+		break;
+	default:
+		re = f_write(&Fil, buffToSave, sizeof(unsigned long)*BUFFER_SIZE, &bw);
+		if( re != FR_OK )
+		{
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, RED_LED);
+		}
+		savingState++;
 		State = GetSensorData;
+		break;
+
 	}
-
-
 }
 
 /*---------------------------------------------------------*/
@@ -123,7 +146,7 @@ int main(void)
 	if( re == FR_OK )
 	{
 		UINT bw = 0;
-		re = f_open(&Fil, "sound.txt", FA_WRITE | FA_CREATE_ALWAYS);
+		re = f_open(&Fil, "sdtest.txt", FA_WRITE | FA_OPEN_ALWAYS );
 		if( re == FR_OK)
 		{
 			f_write(&Fil, "It works fast now!\r\n", sizeof("It works fast now!\r\n"), &bw);

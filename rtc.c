@@ -7,7 +7,11 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "utils/ustdlib.h"
 #include "fatfs/ff.h"
+
+#define FORMATTED_TIME_BUFFER_SIZE 32
+
 
 volatile uint8_t second;
 volatile uint8_t minute;
@@ -16,7 +20,7 @@ volatile uint32_t day;
 volatile uint8_t systicks;
 volatile uint32_t clockRate;
 volatile bool displayTime = false;
-char formattedTime[32];
+char formattedTime[FORMATTED_TIME_BUFFER_SIZE];
 
 void RTCIntHandler()
 {
@@ -32,7 +36,7 @@ void RTCIntHandler()
 			second++;
 			if(displayTime)
 			{
-				sprintf(formattedTime,"%.2u:%.2u:%.2u",hour,minute,second);
+				usnprintf(formattedTime,FORMATTED_TIME_BUFFER_SIZE,"%.2u:%.2u:%.2u",hour,minute,second);
 			}
 
 		}else
@@ -41,7 +45,7 @@ void RTCIntHandler()
 			minute++;
 			if(displayTime)
 			{
-				sprintf(formattedTime,"%.2u:%.2u:%.2u",hour,minute,second);
+				usnprintf(formattedTime,FORMATTED_TIME_BUFFER_SIZE,"%.2u:%.2u:%.2u",hour,minute,second);
 			}
 		}
 
