@@ -13,6 +13,10 @@
 #include "init.h"
 #include "fatfs/ff.h"
 
+ #define RED_LED   GPIO_PIN_1
+ #define BLUE_LED  GPIO_PIN_2
+ #define GREEN_LED GPIO_PIN_3
+
 typedef enum
 {
 	GetSensorData,
@@ -39,7 +43,7 @@ void Adc0_1_ISR(void)
 	ADCIntClear(ADC0_BASE,1);
 
 	ADCSequenceDataGet(ADC0_BASE, 1, &buff[transfers]);
-	transfers += SEQ_BUFFER_SIZE;
+	transfers += 4;
 
 	if( (transfers)%BUFFER_SIZE == 0 )
 	{
@@ -53,17 +57,17 @@ void Adc0_1_ISR(void)
 		}
 		State = SaveData;
 		transfers = 0;
-	}
 
-	// Read the current state of the GPIO pin and
-	// write back the opposite state
-	if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2))
-	{
-		GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3, 0);
-	}
-	else
-	{
-		GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, 4);
+		// Read the current state of the GPIO pin and
+		// write back the opposite state
+		if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
+		{
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
+		}
+		else
+		{
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
+		}
 	}
 }
 void SaveSensorsData()
@@ -84,14 +88,15 @@ void SaveSensorsData()
 			buffToSave = soundValuesBuff1;
 		}
 
-		f_write(&Fil, buffToSave, sizeof(unsigned long)*BUFFER_SIZE, &bw);
-		f_close(&Fil);
+		re = f_write(&Fil, buffToSave, sizeof(unsigned long)*BUFFER_SIZE, &bw);
+		re = f_close(&Fil);
 	}
 	savingDataCount++;
 	if( savingDataCount == SAVING_DATA_COUNT )
 	{
 		State = SendData;
 		savingDataCount = 0;
+		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, GREEN_LED);
 	}
 	else
 	{

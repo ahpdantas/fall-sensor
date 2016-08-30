@@ -49,6 +49,7 @@ void initADC0()
 	ADCSequenceStepConfigure(ADC0_BASE, 1, 3, ADC_CTL_CH0 | ADC_CTL_IE | ADC_CTL_END);
 	ADCSequenceEnable(ADC0_BASE, 1);
 
+	ADCIntEnable(ADC0_BASE,1);
 	IntEnable(INT_ADC0SS1);
 
 }
