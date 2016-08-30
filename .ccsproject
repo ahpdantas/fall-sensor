@@ -12,4 +12,6 @@
 	<createSlaveProjects value=""/>
 	<templateProperties value="id=com.ti.common.project.core.emptyProjectWithMainTemplate,"/>
 	<filesToOpen value="main.c,"/>
+	<origin value="C:/Users/andre/Google Drive/ENGCOMP-IFCE/Sistemas Embarcados 2/fall detection/code/fallSensor/fall-sensor"/>
+	<isTargetManual value="false"/>
 </projectOptions>

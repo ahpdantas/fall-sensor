@@ -13,37 +13,45 @@
 #include "init.h"
 #include "fatfs/ff.h"
 
+typedef enum
+{
+	GetSensorData,
+	SaveData,
+	SendData,
+}FallSensorStates;
 
-
-#define BUFFER_SIZE 1024
 
 unsigned long soundValuesBuff1[BUFFER_SIZE];
 unsigned long soundValuesBuff2[BUFFER_SIZE];
 
-unsigned long *index = 0;
+unsigned long *buff = NULL;
 unsigned int transfers = 0;
+
+FallSensorStates State = GetSensorData;
 
 FATFS FatFs;		/* FatFs work area needed for each volume */
 FIL Fil;			/* File object needed for each open file */
+FRESULT re;
 
 void Adc0_1_ISR(void)
 {
 	// Clear the timer interrupt
 	ADCIntClear(ADC0_BASE,1);
 
-	ADCSequenceDataGet(ADC0_BASE, 1, &index[transfers]);
-	transfers += 4;
+	ADCSequenceDataGet(ADC0_BASE, 1, &buff[transfers]);
+	transfers += SEQ_BUFFER_SIZE;
 
 	if( (transfers)%BUFFER_SIZE == 0 )
 	{
-		if( index == soundValuesBuff1 )
+		if( buff == soundValuesBuff1 )
 		{
-			index = soundValuesBuff2;
+			buff = soundValuesBuff2;
 		}
 		else
 		{
-			index = soundValuesBuff1;
+			buff = soundValuesBuff1;
 		}
+		State = SaveData;
 		transfers = 0;
 	}
 
@@ -58,7 +66,40 @@ void Adc0_1_ISR(void)
 		GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, 4);
 	}
 }
+void SaveSensorsData()
+{
+	static unsigned long savingDataCount = 0;
+	unsigned long *buffToSave = NULL;
 
+	re = f_open(&Fil, "datalog.txt", FA_WRITE | FA_OPEN_ALWAYS );
+	if( re == FR_OK)
+	{
+		UINT bw = 0;
+		if( buff == soundValuesBuff1 )
+		{
+			buffToSave = soundValuesBuff2;
+		}
+		else if( buff == soundValuesBuff2 )
+		{
+			buffToSave = soundValuesBuff1;
+		}
+
+		f_write(&Fil, buffToSave, sizeof(unsigned long)*BUFFER_SIZE, &bw);
+		f_close(&Fil);
+	}
+	savingDataCount++;
+	if( savingDataCount == SAVING_DATA_COUNT )
+	{
+		State = SendData;
+		savingDataCount = 0;
+	}
+	else
+	{
+		State = GetSensorData;
+	}
+
+
+}
 
 /*---------------------------------------------------------*/
 /* User Provided Timer Function for FatFs module           */
@@ -69,16 +110,14 @@ void Adc0_1_ISR(void)
 
 int main(void)
 {
-
-	FRESULT re;
 	init();
 
-	index = soundValuesBuff1;
+	buff = soundValuesBuff1;
 	//save a file into SD Card to exemplify the library usage
 	re = f_mount(&FatFs, "", 1);
 	if( re == FR_OK )
 	{
-		UINT bw;
+		UINT bw = 0;
 		re = f_open(&Fil, "sound.txt", FA_WRITE | FA_CREATE_ALWAYS);
 		if( re == FR_OK)
 		{
@@ -89,5 +128,16 @@ int main(void)
 
    	while(1)
    	{
+   		switch(State)
+   		{
+   		case GetSensorData:
+   			break;
+   		case SaveData:
+   			SaveSensorsData();
+   			break;
+   		case SendData:
+   			State = GetSensorData;
+   			break;
+   		}
 	}
 }
