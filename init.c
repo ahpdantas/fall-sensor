@@ -14,8 +14,12 @@
 #include "driverlib/pin_map.h"
 #include "driverlib/timer.h"
 #include "driverlib/adc.h"
+#include "driverlib/uart.h"
+#include "utils/uartstdio.h"
 #include "init.h"
 #include "rtc.h"
+
+char UARTRecBuffer[128];
 
 void initGpios()
 {
@@ -62,6 +66,36 @@ void initRTC()
 	SysTickEnable();
 }
 
+
+void initUART1()
+{
+
+	SysCtlPeripheralEnable(SYSCTL_PERIPH2_UART1);
+	SysCtlPeripheralEnable(SYSCTL_PERIPH2_GPIOB);
+
+	GPIOPinConfigure(GPIO_PB0_U1RX);
+	GPIOPinConfigure(GPIO_PB1_U1TX);
+	GPIOPinTypeUART(GPIO_PORTB_BASE, GPIO_PIN_0 | GPIO_PIN_1 );
+
+	UARTConfigSetExpClk(UART1_BASE, SysCtlClockGet(), 19200, UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE );
+
+}
+
+void initUART2()
+{
+
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART3);
+	SysCtlPeripheralEnable(SYSCTL_PERIPH2_GPIOC);
+
+	GPIOPinConfigure(GPIO_PC6_U3RX);
+	GPIOPinConfigure(GPIO_PC7_U3TX);
+	GPIOPinTypeUART(GPIO_PORTC_BASE, GPIO_PIN_6 | GPIO_PIN_7 );
+
+	UARTConfigSetExpClk(UART3_BASE, SysCtlClockGet(), 19200, UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE );
+
+}
+
+
 void init()
 {
 	//configure the system clock to run at 40MHz
@@ -70,5 +104,7 @@ void init()
 	initADC0();
 	initTimer0();
 	initRTC();
+	initUART1();
+	initUART2();
 }
 

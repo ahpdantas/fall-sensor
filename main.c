@@ -8,6 +8,7 @@
 #include "driverlib/interrupt.h"
 #include "driverlib/gpio.h"
 #include "driverlib/pin_map.h"
+#include "driverlib/uart.h"
 #include "driverlib/timer.h"
 #include "driverlib/adc.h"
 #include "utils/ustdlib.h"
@@ -138,6 +139,7 @@ void SaveSensorsData()
 
 int main(void)
 {
+	char data;
 	init();
 
 	buff = soundValuesBuff1;
@@ -167,5 +169,18 @@ int main(void)
    			State = GetSensorData;
    			break;
    		}
+
+   		//Test WIFI Module
+		if(UARTCharsAvail(UART3_BASE))
+		{
+			UARTCharPut(UART1_BASE, UARTCharGet(UART3_BASE) );
+		}
+
+		if(UARTCharsAvail(UART1_BASE))
+		{
+			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE) );
+		}
+
+
 	}
 }

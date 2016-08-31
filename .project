@@ -26,6 +26,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>library/uartstdio.c</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/StellarisWare/utils/uartstdio.c</locationURI>
+		</link>
+		<link>
 			<name>library/ustdlib.c</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/StellarisWare/utils/ustdlib.c</locationURI>
