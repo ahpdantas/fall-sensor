@@ -14,6 +14,7 @@
 #include "utils/ustdlib.h"
 #include "init.h"
 #include "fatfs/ff.h"
+#include "esp8266/esp8266.h"
 
  #define RED_LED   GPIO_PIN_1
  #define BLUE_LED  GPIO_PIN_2
@@ -71,16 +72,27 @@ void Adc0_1_ISR(void)
 
 		// Read the current state of the GPIO pin and
 		// write back the opposite state
-		if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
-		{
-			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
-		}
-		else
-		{
-			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
-		}
+
 	}
 }
+
+void Timer1AIntHandler(void)
+{
+	// Clear the timer interrupt
+	TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+	ESP8266_TimeUpdate(&ESP8266,TIME_TIMER1A_INTERRUPT);
+
+	if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
+	{
+		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
+	}
+	else
+	{
+		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
+	}
+
+}
+
 void SaveSensorsData()
 {
 	static SavingState savingState = CREATE_OPEN_NEW_FILE;
@@ -139,7 +151,6 @@ void SaveSensorsData()
 
 int main(void)
 {
-	char data;
 	init();
 
 	buff = soundValuesBuff1;
@@ -169,6 +180,8 @@ int main(void)
    			State = GetSensorData;
    			break;
    		}
+
+   		ESP8266_Update(&ESP8266);
 /*
    		//Test WIFI Module
 		if(UARTCharsAvail(UART3_BASE))

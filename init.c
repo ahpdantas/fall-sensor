@@ -17,7 +17,6 @@
 #include "driverlib/uart.h"
 #include "utils/uartstdio.h"
 #include "init.h"
-#include "esp8266/esp8266.h"
 #include "rtc.h"
 
 char UARTRecBuffer[128];
@@ -40,6 +39,24 @@ void initTimer0()
 	TimerLoadSet(TIMER0_BASE, TIMER_A, ulPeriod -1);
 	TimerControlTrigger(TIMER0_BASE,TIMER_A,true);
 	TimerEnable(TIMER0_BASE, TIMER_A);
+}
+
+void initTimer1()
+{
+	unsigned long ulPeriod = 0;
+
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
+	TimerConfigure(TIMER1_BASE, TIMER_CFG_32_BIT_PER);
+
+	ulPeriod = ( SysCtlClockGet() / FREQ_TIMER1_INTERRUPT);
+	TimerLoadSet(TIMER1_BASE, TIMER_A, ulPeriod -1);
+
+	TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+	IntEnable(INT_TIMER1A);
+
+	//IntMasterEnable();
+	TimerEnable(TIMER1_BASE,TIMER_A);
+
 }
 
 void initADC0()
@@ -80,19 +97,25 @@ void initUART1()
 	GPIOPinTypeUART(GPIO_PORTB_BASE, GPIO_PIN_0 | GPIO_PIN_1 );
 
 	UARTConfigSetExpClk(UART1_BASE, SysCtlClockGet(), 19200, UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE );
-
+	UARTStdioInit(1);
 }
 
 void init()
 {
+	ESP8266_Result_t result;
 	//configure the system clock to run at 40MHz
 	SysCtlClockSet(SYSCTL_SYSDIV_5|SYSCTL_USE_PLL|SYSCTL_XTAL_16MHZ|SYSCTL_OSC_MAIN);
 	initGpios();
 	initADC0();
 	initTimer0();
+	initTimer1();
 	initRTC();
 	initUART1();
-	ESP8266_Init(&ESP8266,19200);
+	while( (result = ESP8266_Init(&ESP8266,19200)) != ESP_OK ){
+		UARTprintf("Initializing not completed. Result: %d\n", result);
+	}
+	UARTprintf("Initialization completed\n");
+
 
 }
 
