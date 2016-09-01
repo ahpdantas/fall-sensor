@@ -169,7 +169,7 @@ int main(void)
    			State = GetSensorData;
    			break;
    		}
-
+/*
    		//Test WIFI Module
 		if(UARTCharsAvail(UART3_BASE))
 		{
@@ -179,7 +179,7 @@ int main(void)
 		if(UARTCharsAvail(UART1_BASE))
 		{
 			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE) );
-		}
+		}*/
 
 
 	}
