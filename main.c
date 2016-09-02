@@ -12,6 +12,7 @@
 #include "driverlib/timer.h"
 #include "driverlib/adc.h"
 #include "utils/ustdlib.h"
+#include "utils/uartstdio.h"
 #include "init.h"
 #include "fatfs/ff.h"
 #include "esp8266/esp8266.h"
@@ -24,16 +25,15 @@
 
 typedef enum
 {
-	GetSensorData,
-	SaveData,
-	SendData,
-}FallSensorStates;
-
-typedef enum
-{
 	CREATE_OPEN_NEW_FILE,
 	CLOSE_SEND_FILE = SAVING_DATA_COUNT
 }SavingState;
+
+typedef enum
+{
+	OPEN_CONNECTION,
+	CLOSE_CONNECTION
+}SendingState;
 
 unsigned long soundValuesBuff1[BUFFER_SIZE];
 unsigned long soundValuesBuff2[BUFFER_SIZE];
@@ -43,7 +43,8 @@ char FileName[FILE_NAME_BUFFER_SIZE];
 unsigned long *buff = NULL;
 unsigned int transfers = 0;
 
-FallSensorStates State = GetSensorData;
+bool IsReadyToSave = false;
+unsigned int filesAvailable = 0;
 
 FATFS FatFs;		/* FatFs work area needed for each volume */
 FIL Fil;			/* File object needed for each open file */
@@ -67,7 +68,7 @@ void Adc0_1_ISR(void)
 		{
 			buff = soundValuesBuff1;
 		}
-		State = SaveData;
+		IsReadyToSave = true;
 		transfers = 0;
 
 		// Read the current state of the GPIO pin and
@@ -100,6 +101,11 @@ void SaveSensorsData()
 	static unsigned int fileID = 0;
 	UINT bw = 0;
 
+	if( !IsReadyToSave )
+		return;
+
+	IsReadyToSave = false;
+
 	switch( savingState )
 	{
 	case CREATE_OPEN_NEW_FILE:
@@ -108,6 +114,7 @@ void SaveSensorsData()
 		re = f_open(&Fil, FileName, FA_WRITE | FA_OPEN_ALWAYS );
 		if( re == FR_OK )
 		{
+			UARTprintf("Creating %s...\n", FileName);
 			savingState++;
 			fileID++;
 			if( buff == soundValuesBuff1 )
@@ -124,7 +131,9 @@ void SaveSensorsData()
 		re = f_close(&Fil);
 		if( re == FR_OK )
 		{
-			State = SendData;
+			UARTprintf("Closing %s...\n", FileName);
+			UARTprintf("Preparing to send data...\n");
+			filesAvailable++;
 			savingState = CREATE_OPEN_NEW_FILE;
 			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, GREEN_LED);
 		}
@@ -136,7 +145,37 @@ void SaveSensorsData()
 			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, RED_LED);
 		}
 		savingState++;
-		State = GetSensorData;
+		break;
+
+	}
+}
+
+void SendSensorsData()
+{
+	static SendingState sendingState = OPEN_CONNECTION;
+	ESP8266_Result_t result = ESP_OK;
+
+	if( !filesAvailable )
+		return;
+
+	ESP8266_WaitReady(&ESP8266);
+
+	switch( sendingState )
+	{
+	case OPEN_CONNECTION:
+		result = ESP8266_StartClientConnection(&ESP8266, "sensor", "www.google.com", 80,NULL);
+		if( result == ESP_OK )
+		{
+			sendingState = CLOSE_CONNECTION;
+		}
+		break;
+	case CLOSE_CONNECTION:
+		result = ESP8266_CloseConnection(&ESP8266,&ESP8266.Connection[0]);
+		if( result == ESP_OK )
+		{
+			filesAvailable--;
+			sendingState = OPEN_CONNECTION;
+		}
 		break;
 
 	}
@@ -167,33 +206,144 @@ int main(void)
 		}
 	}
 
-   	while(1)
+	while(1)
    	{
-   		switch(State)
-   		{
-   		case GetSensorData:
-   			break;
-   		case SaveData:
-   			SaveSensorsData();
-   			break;
-   		case SendData:
-   			State = GetSensorData;
-   			break;
-   		}
-
    		ESP8266_Update(&ESP8266);
-/*
-   		//Test WIFI Module
-		if(UARTCharsAvail(UART3_BASE))
-		{
-			UARTCharPut(UART1_BASE, UARTCharGet(UART3_BASE) );
-		}
 
-		if(UARTCharsAvail(UART1_BASE))
-		{
-			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE) );
-		}*/
+		SaveSensorsData();
+		SendSensorsData();
 
+   		if (UARTCharsAvail(UART1_BASE))
+   		{
+   			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE));
+   		}
 
 	}
 }
+
+/* Called when ready string detected */
+void ESP8266_Callback_DeviceReady(ESP8266_t* ESP8266) {
+	UARTprintf("Device is ready\r\n");
+}
+
+/* Called when watchdog reset on ESP8266 is detected */
+void ESP8266_Callback_WatchdogReset(ESP8266_t* ESP8266) {
+	UARTprintf("Watchdog reset detected!\r\n");
+}
+
+/* Called when we are disconnected from WIFI */
+void ESP8266_Callback_WifiDisconnected(ESP8266_t* ESP8266) {
+	UARTprintf("Wifi is disconnected!\r\n");
+}
+
+void ESP8266_Callback_WifiConnected(ESP8266_t* ESP8266) {
+	UARTprintf("Wifi is connected!\r\n");
+}
+
+void ESP8266_Callback_WifiConnectFailed(ESP8266_t* ESP8266) {
+	UARTprintf("Connection to wifi network has failed. Reason %d\r\n", ESP8266->WifiConnectError);
+}
+
+void ESP8266_Callback_WifiGotIP(ESP8266_t* ESP8266) {
+	UARTprintf("Wifi got an IP address\r\n");
+
+	/* Read that IP from module */
+	UARTprintf("Grabbing IP status: %d\r\n", ESP8266_GetSTAIP(ESP8266));
+}
+
+void ESP8266_Callback_WifiIPSet(ESP8266_t* ESP8266) {
+	/* We have STA IP set (IP set by router we are connected to) */
+	UARTprintf("We have valid IP address: %d.%d.%d.%d\r\n", ESP8266->STAIP[0], ESP8266->STAIP[1], ESP8266->STAIP[2], ESP8266->STAIP[3]);
+}
+
+void ESP8266_Callback_DHCPTimeout(ESP8266_t* ESP8266) {
+	UARTprintf("DHCP timeout!\r\n");
+}
+
+void ESP8266_Callback_WifiDetected(ESP8266_t* ESP8266, ESP8266_APs_t* ESP8266_AP) {
+	uint8_t i = 0;
+
+	/* Print number of detected stations */
+	UARTprintf("We have detected %d AP stations\r\n", ESP8266_AP->Count);
+
+	/* Print each AP */
+	for (i = 0; i < ESP8266_AP->Count; i++) {
+		/* Print SSID for each AP */
+		UARTprintf("%2d: %s\r\n", i, ESP8266_AP->AP[i].SSID);
+	}
+}
+
+/************************************/
+/*         CLIENT CALLBACKS         */
+/************************************/
+void ESP8266_Callback_ClientConnectionConnected(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	/* We are connected to external server */
+	UARTprintf("Client connected to server! Connection number: %s\r\n", Connection->Name);
+
+	/* We are connected to server, request to sent header data to server */
+	ESP8266_RequestSendData(ESP8266, Connection);
+}
+
+/* Called when client connection fails to server */
+void ESP8266_Callback_ClientConnectionError(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	/* Fail with connection to server */
+	UARTprintf("An error occured when trying to connect on connection: %d\r\n", Connection->Number);
+}
+
+/* Called when data are ready to be sent to server */
+uint16_t ESP8266_Callback_ClientConnectionSendData(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection, char* Buffer, uint16_t max_buffer_size) {
+	/* Format data to sent to server */
+	usnprintf(Buffer,max_buffer_size, "GET / HTTP/1.1\r\n");
+	strcat(Buffer, "Host: stm32f4-discovery.com\r\n");
+	strcat(Buffer, "Connection: close\r\n");
+	strcat(Buffer, "\r\n");
+
+	/* Return length of buffer */
+	return strlen(Buffer);
+}
+
+/* Called when data are send successfully */
+void ESP8266_Callback_ClientConnectionDataSent(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	UARTprintf("Data successfully sent as client!\r\n");
+}
+
+/* Called when error returned trying to sent data */
+void ESP8266_Callback_ClientConnectionDataSentError(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	UARTprintf("Error while sending data on connection %d!\r\n", Connection->Number);
+}
+
+uint32_t time = 0;
+void ESP8266_Callback_ClientConnectionDataReceived(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection, char* Buffer) {
+	/* Data received from server back to client */
+	UARTprintf("Data received from server on connection: %s; Number of bytes received: %d; %d / %d;\r\n",
+		Connection->Name,
+		Connection->BytesReceived,
+		Connection->TotalBytesReceived,
+		Connection->ContentLength
+	);
+
+	/* Print message when first packet */
+	if (Connection->Flags.F.FirstPacket) {
+		/* Print first message */
+		UARTprintf("This is first packet received. Content length on this connection is: %d\r\n", Connection->ContentLength);
+	}
+}
+
+/* Called when connection is closed */
+void ESP8266_Callback_ClientConnectionClosed(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	UARTprintf("Client connection closed, connection: %d; Total bytes received: %d; Content-Length header: %d\r\n",
+		Connection->Number, Connection->TotalBytesReceived, Connection->ContentLength
+	);
+
+	/* Calculate time */
+
+
+	/* Print time we need to get data back from server */
+	//UARTprintf("Time for data: %u ms; speed: %d kb/s\r\n", time, Connection->TotalBytesReceived / time);
+}
+
+/* Called when timeout is reached on connection to server */
+void ESP8266_Callback_ClientConnectionTimeout(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+	UARTprintf("Timeout reached on connection: %d\r\n", Connection->Number);
+}
+

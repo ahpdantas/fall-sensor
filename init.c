@@ -96,8 +96,8 @@ void initUART1()
 	GPIOPinConfigure(GPIO_PB1_U1TX);
 	GPIOPinTypeUART(GPIO_PORTB_BASE, GPIO_PIN_0 | GPIO_PIN_1 );
 
-	UARTConfigSetExpClk(UART1_BASE, SysCtlClockGet(), 19200, UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE );
-	UARTStdioInit(1);
+	UARTConfigSetExpClk(UART1_BASE, SysCtlClockGet(), 115200, UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE );
+	UARTStdioInitExpClk(1,115200);
 }
 
 void init()
@@ -111,9 +111,36 @@ void init()
 	initTimer1();
 	initRTC();
 	initUART1();
-	while( (result = ESP8266_Init(&ESP8266,19200)) != ESP_OK ){
+	while( (result = ESP8266_Init(&ESP8266,115200)) != ESP_OK ){
 		UARTprintf("Initializing not completed. Result: %d\n", result);
 	}
+
+	ESP8266_WaitReady(&ESP8266);
+
+	while (ESP8266_SetMode(&ESP8266, ESP8266_Mode_STA_AP) != ESP_OK);
+
+
+	/* Disconnect from wifi if connected */
+	ESP8266_WifiDisconnect(&ESP8266);
+
+	/* Wait till finish */
+	ESP8266_WaitReady(&ESP8266);
+
+	/* Get a list of all stations */
+	ESP8266_ListWifiStations(&ESP8266);
+
+	/* Wait till finish */
+	ESP8266_WaitReady(&ESP8266);
+
+	/* Connect to wifi and save settings */
+	ESP8266_WifiConnect(&ESP8266, "ANDRE_WIFI", "gr68ci49");
+
+	/* Wait till finish */
+	ESP8266_WaitReady(&ESP8266);
+
+	/* Get connected devices */
+	ESP8266_WifiGetConnected(&ESP8266);
+
 	UARTprintf("Initialization completed\n");
 
 
