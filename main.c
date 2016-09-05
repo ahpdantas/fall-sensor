@@ -32,8 +32,12 @@ typedef enum
 typedef enum
 {
 	OPEN_CONNECTION,
+	REQUEST_CONNECTION,
+	SEND_DATA,
 	CLOSE_CONNECTION
 }SendingState;
+
+SendingState sendingState = OPEN_CONNECTION;
 
 unsigned long soundValuesBuff1[BUFFER_SIZE];
 unsigned long soundValuesBuff2[BUFFER_SIZE];
@@ -152,7 +156,6 @@ void SaveSensorsData()
 
 void SendSensorsData()
 {
-	static SendingState sendingState = OPEN_CONNECTION;
 	ESP8266_Result_t result = ESP_OK;
 
 	if( !filesAvailable )
@@ -163,11 +166,20 @@ void SendSensorsData()
 	switch( sendingState )
 	{
 	case OPEN_CONNECTION:
-		result = ESP8266_StartClientConnection(&ESP8266, "sensor", "www.google.com", 80,NULL);
+		result = ESP8266_StartClientConnection(&ESP8266, "sensor", "192.168.0.105", 5000,NULL);
 		if( result == ESP_OK )
 		{
-			sendingState = CLOSE_CONNECTION;
+			sendingState = REQUEST_CONNECTION;
 		}
+		break;
+	case REQUEST_CONNECTION:
+		result = ESP8266_RequestSendData(&ESP8266,&ESP8266.Connection[0]);
+		if( result == ESP_OK )
+		{
+			sendingState = SEND_DATA;
+		}
+		break;
+	case SEND_DATA:
 		break;
 	case CLOSE_CONNECTION:
 		result = ESP8266_CloseConnection(&ESP8266,&ESP8266.Connection[0]);
@@ -305,6 +317,7 @@ uint16_t ESP8266_Callback_ClientConnectionSendData(ESP8266_t* ESP8266, ESP8266_C
 /* Called when data are send successfully */
 void ESP8266_Callback_ClientConnectionDataSent(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	UARTprintf("Data successfully sent as client!\r\n");
+	sendingState = CLOSE_CONNECTION;
 }
 
 /* Called when error returned trying to sent data */
