@@ -117,11 +117,15 @@ void init()
 
 	ESP8266_WaitReady(&ESP8266);
 
+	ESP8266_SetAutoConnect(&ESP8266,ESP8266_AutoConnect_Off);
+
+	ESP8266_WaitReady(&ESP8266);
+
 	while (ESP8266_SetMode(&ESP8266, ESP8266_Mode_STA_AP) != ESP_OK);
 
 
 	/* Disconnect from wifi if connected */
-	ESP8266_WifiDisconnect(&ESP8266);
+	//ESP8266_WifiDisconnect(&ESP8266);
 
 	/* Wait till finish */
 	ESP8266_WaitReady(&ESP8266);
@@ -140,6 +144,9 @@ void init()
 
 	/* Get connected devices */
 	ESP8266_WifiGetConnected(&ESP8266);
+
+	/* Wait till finish */
+	ESP8266_WaitReady(&ESP8266);
 
 	UARTprintf("Initialization completed\n");
 

@@ -25,7 +25,6 @@
  */
 #include "esp8266/esp8266.h"
 #include "utils/ustdlib.h"
-
 /* Commands list */
 #define ESP8266_COMMAND_IDLE            0
 #define ESP8266_COMMAND_CWQAP           1
@@ -61,11 +60,11 @@
 #define ESP8266_COMMAND_AUTOCONN        31
 #define ESP8266_COMMAND_SSLBUFFERSIZE   32
 #define ESP8266_COMMAND_RFPOWER         33
+#define ESP8266_COMMAND_CIPDOMAIN       34
 
-#if ESP8266_USE_SNTP == 1                                   /* User custom commands */
 #define ESP8266_COMMAND_SNTP_SET        100
 #define ESP8266_COMMAND_SNTP            101
-#endif
+ 
  
 #define ESP8266_DEFAULT_BAUDRATE        115200              /* Default ESP8266 baudrate */
 #define ESP8266_TIMEOUT                 30000               /* Timeout value in milliseconds */
@@ -74,7 +73,7 @@
 #define ESP8266_DEBUG(x)                printf("%s", x)
 
 /* Wrapper for sending strings */
-#define ESP8266_USARTSENDSTRING(str)    ESP8266_LL_USARTSend((uint8_t *)(str), strlen((char *)(str)))
+#define ESP8266_USARTSENDSTRING(str)    ESP8266_LL_USARTSend((uint8_t *)(str), ustrlen((char *)(str)))
 #define ESP8266_USARTSENDCHAR(c)        ESP8266_LL_USARTSend((uint8_t *)(c), 1)
 
 
@@ -85,6 +84,7 @@
 
 /* Constants */
 #define ESP8266_MAX_RFPWR               82
+#define ESP8266_MAX_DATA_LEN            2046
 
 /* ESP responses */
 #define ESP8266_RESPONSE_OK             "OK\r\n"
@@ -111,18 +111,27 @@ static char ConnectionData[ESP8266_CONNECTION_BUFFER_SIZE + 1]; /* Data array */
 /* Buffers */
 static BUFFER_t TMP_Buffer;
 static BUFFER_t USART_Buffer;
-static uint8_t TMPBuffer[ESP8266_TMPBUFFER_SIZE];
-static uint8_t USARTBuffer[ESP8266_USARTBUFFER_SIZE];
+static uint8_t TMPBuffer[ESP8266_TMPBUFFER_SIZE + 1];
+static uint8_t USARTBuffer[ESP8266_USARTBUFFER_SIZE + 1];
 
 /* List of possible ESP8266 baudrates */
 static uint32_t ESP8266_Baudrate[] = {
-    9600, 19200, 57600, 115200, 921600
+    9600, 57600, 115200, 921600
 };
 
 /* Check IDLE */
 #define ESP8266_CHECK_IDLE(ESP8266)                         \
 do {                                                        \
-    if ((ESP8266)->ActiveCommand != ESP8266_COMMAND_IDLE) { \
+    if ((ESP8266)->ActiveCommand != ESP8266_COMMAND_IDLE || (ESP8266)->IPD.InIPD) { \
+        ESP8266_Update(ESP8266);                            \
+        ESP8266_RETURNWITHSTATUS(ESP8266, ESP_BUSY);        \
+    }                                                       \
+} while (0)
+
+/* Check IDLE */
+#define ESP8266_CHECK_IDLECMD(ESP8266, CMD)                 \
+do {                                                        \
+    if (((ESP8266)->ActiveCommand != ESP8266_COMMAND_IDLE && (ESP8266)->ActiveCommand != (CMD)) || (ESP8266)->IPD.InIPD) { \
         ESP8266_Update(ESP8266);                            \
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_BUSY);        \
     }                                                       \
@@ -143,10 +152,7 @@ do {                                                        \
 /* Reset ESP connection */
 #define ESP8266_RESET_CONNECTION(ESP8266, conn)             \
 do {                                                        \
-    (conn)->Flags.F.Active = 0;                             \
-    (conn)->Flags.F.Client = 0;                             \
-    (conn)->Flags.F.FirstPacket = 0;                        \
-    (conn)->Flags.F.HeadersDone = 0;                        \
+    (conn)->Flags.Value = 0;                                \
 } while (0)                                               
 
 /* Wait and return from function with operation status */
@@ -198,7 +204,7 @@ void* mem_mem(void* haystack, size_t haystacksize, void* needle, size_t needlesi
 
 static                                                		/* Converts integer number to string format */
 void Int2String(char* ptr, long int num) {
-	usprintf(ptr, "%d", num);
+    usprintf(ptr, "%d", num);
 }
 
 static                                                		/* Returns number from hex value */
@@ -259,12 +265,13 @@ uint32_t ParseHexNumber(char* ptr, uint8_t* cnt) {
 static                                                		/* Parses IP string */
 void ParseIP(char* ip_str, uint8_t* arr, uint8_t* cnt) {
     char* token;
+    //char* saveptr;
     uint8_t i = 0, x = 0, c;
     char Data[16];
     
     memcpy(Data, ip_str, sizeof(Data) - 1);           		/* Make a string copy first */
     Data[sizeof(Data) - 1] = 0;    
-    token = strtok(Data, ".");                        		/* Parse numbers, skip :" */
+    token = strtok(Data, ".");//, &saveptr);             		/* Parse numbers, skip :" */
     while (token != NULL) {
         arr[x++] = ParseNumber(token, &c);
         i += c;
@@ -272,7 +279,7 @@ void ParseIP(char* ip_str, uint8_t* arr, uint8_t* cnt) {
             break;
         }
         i++;
-        token = strtok(NULL, ".");
+        token = strtok(NULL, ".");//, &saveptr);
     }
     
     if (cnt != NULL) {
@@ -283,9 +290,10 @@ void ParseIP(char* ip_str, uint8_t* arr, uint8_t* cnt) {
 static                                                		/* Parses MAC string */
 void ParseMAC(char* ptr, uint8_t* arr, uint8_t* cnt) {
     char* hexptr;
+    //char* saveptr;
     uint8_t hexnum = 0, tmpcnt = 0, sum = 0;
     
-    hexptr = strtok(ptr, ":");                        		/* Get token */
+    hexptr = strtok(ptr, ":");//, &saveptr);            		/* Get token */
     while (hexptr != NULL) {                        		/* Do it till NULL */
         arr[hexnum++] = ParseHexNumber(hexptr, &tmpcnt);
         sum += tmpcnt;
@@ -293,7 +301,7 @@ void ParseMAC(char* ptr, uint8_t* arr, uint8_t* cnt) {
             break;
         }
         sum++;
-        hexptr = strtok(NULL, ":");
+        hexptr = strtok(NULL, ":");//, &saveptr);
     }
     
     if (cnt) {
@@ -354,15 +362,16 @@ static
 void ParseCWLAP(ESP8266_t* ESP8266, char* Buffer) {
     uint8_t pos = 7, num = 0;
     char* ptr;
+    //char* saveptr;
     
-    if (ESP8266_APs.Count >= ESP8266_MAX_CONNECTIONS) {    	/* Check if we have memory available first */
+    if (ESP8266_APs.Count >= ESP8266_MAX_DETECTED_AP) {    	/* Check if we have memory available first */
         return;
     }
     
     if (Buffer[pos] == '(') {                        		/* Get start pointer */
         pos++;
     }
-    ptr = strtok(&Buffer[pos], ",");                		/* Get token */
+    ptr = strtok(&Buffer[pos], ",");//, &saveptr);      		/* Get token */
     while (ptr != NULL) {                            		/* Do it until token != NULL */
         switch (num++) {                            		/* Get positions */
             case 0: 
@@ -370,7 +379,7 @@ void ParseCWLAP(ESP8266_t* ESP8266, char* Buffer) {
                 break;
             case 1:
                 ptr++;                                		/* Ignore first and last " */
-                ptr[strlen(ptr) - 1] = 0;
+                ptr[ustrlen(ptr) - 1] = 0;
                 strncpy(ESP8266_APs.AP[ESP8266_APs.Count].SSID, ptr, ESP8266_MAX_SSID_NAME);
                 break;
             case 2: 
@@ -378,7 +387,7 @@ void ParseCWLAP(ESP8266_t* ESP8266, char* Buffer) {
                 break;
             case 3:
                 ptr++;                                		/* Ignore first and last " */
-                ptr[strlen(ptr) - 1] = 0;
+                ptr[ustrlen(ptr) - 1] = 0;
                 ParseMAC(ptr, ESP8266_APs.AP[ESP8266_APs.Count].MAC, NULL);	/* Parse MAC address */
                 break;
             case 4: 
@@ -392,7 +401,7 @@ void ParseCWLAP(ESP8266_t* ESP8266, char* Buffer) {
                 break;
             default: break;
         }        
-        ptr = strtok(NULL, ",");                    		/* Get new token */
+        ptr = strtok(NULL, ",");//, &saveptr);           		/* Get new token */
     }
     ESP8266_APs.Count++;                            		/* Increase count */
 }
@@ -504,7 +513,7 @@ void ParseCWJAP(ESP8266_t* ESP8266, char* Buffer) {
     char* ptr = Buffer;
     uint8_t i, cnt;
     
-    if (!strstr(Buffer, "+CWJAP_")) {                		/* Check for existance */
+    if (!ustrstr(Buffer, "+CWJAP_")) {                		/* Check for existance */
         return;
     }
     while (*ptr && *ptr != '"') {                    		/* Find first " character */
@@ -529,7 +538,7 @@ void ParseCWJAP(ESP8266_t* ESP8266, char* Buffer) {
 
 static
 ESP8266_Result_t SendCommand(ESP8266_t* ESP8266, uint8_t Command, char* CommandStr, const char* StartRespond) {
-    ESP8266_CHECK_IDLE(ESP8266);                    		/* Check idle mode */
+    ESP8266_CHECK_IDLECMD(ESP8266, Command);                /* Check idle mode */
     
     ESP8266->ActiveCommand = Command;                		/* Save current active command */
     ESP8266->ActiveCommandResponse = (char *)StartRespond;	/* Save current active command response */
@@ -590,11 +599,11 @@ void CallConnectionCallbacks(ESP8266_t* ESP8266) {
     uint8_t conn_number;
     
     for (conn_number = 0; conn_number < ESP8266_MAX_CONNECTIONS; conn_number++) {	/* Check if there are any pending data to be sent to connection */
-        if (ESP8266->Connection[conn_number].Flags.F.Active && ESP8266->Connection[conn_number].Flags.F.CallDataReceived) {	/* We must call function for received data */
+        if (ESP8266->Connection[conn_number].Flags.F.Active && ESP8266->Connection[conn_number].Flags.F.Call_DataReceived) {	/* We must call function for received data */
             if (!ESP8266->Connection[conn_number].Flags.F.Client && ESP8266->ActiveCommand != ESP8266_COMMAND_IDLE) {	/* In case we are server, we must be idle to call functions */
                 continue;
             }
-            ESP8266->Connection[conn_number].Flags.F.CallDataReceived = 0;    /* Clear flag */
+            ESP8266->Connection[conn_number].Flags.F.Call_DataReceived = 0;    /* Clear flag */
             ESP8266->Connection[conn_number].Data[ESP8266->Connection[conn_number].DataSize] = 0;
             
             if (ESP8266->Connection[conn_number].Flags.F.Client) {    /* Call user function according to connection type */
@@ -603,32 +612,158 @@ void CallConnectionCallbacks(ESP8266_t* ESP8266) {
                 ESP8266_Callback_ServerConnectionDataReceived(ESP8266, &ESP8266->Connection[conn_number], ESP8266->Connection[conn_number].Data);	/* Server mode */
             }
         }
+        
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionDataSent && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionDataSent = 0;
+            ESP8266_Callback_ClientConnectionDataSent(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionDataSentError && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionDataSentError = 0;
+            ESP8266_Callback_ClientConnectionDataSentError(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionClosed && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionClosed = 0;
+            ESP8266_Callback_ClientConnectionClosed(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionConnected && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionConnected = 0;
+            ESP8266_Callback_ClientConnectionConnected(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionError && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ClientConnectionError = 0;
+            ESP8266_Callback_ClientConnectionError(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionDataSent && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionDataSent = 0;
+            ESP8266_Callback_ServerConnectionDataSent(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionDataSentError && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionDataSentError = 0;
+            ESP8266_Callback_ServerConnectionDataSentError(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionActive && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionActive = 0;
+            ESP8266_Callback_ServerConnectionActive(ESP8266, &ESP8266->Connection[conn_number]);
+        }
+        if (ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionClosed && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+            ESP8266->Connection[conn_number].Flags.F.Call_ServerConnectionClosed = 0;
+            ESP8266_Callback_ServerConnectionClosed(ESP8266, &ESP8266->Connection[conn_number]);
+        }
     }
 }
 
 static
+void CallCallbacks(ESP8266_t* ESP8266) {
+    if (ESP8266->Flags.F.Call_DeviceReady && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_DeviceReady = 0;
+        ESP8266_Callback_DeviceReady(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WatchdogReset && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WatchdogReset = 0;
+        ESP8266_Callback_WatchdogReset(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WifiConnected && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiConnected = 0;
+        ESP8266_Callback_WifiConnected(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WifiDisconnected && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiDisconnected = 0;
+        ESP8266_Callback_WifiDisconnected(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WifiGotIP && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiGotIP = 0;
+        ESP8266_Callback_WifiGotIP(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_DHCPTimeout && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_DHCPTimeout = 0;
+        ESP8266_Callback_DHCPTimeout(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WifiConnectFailed && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiConnectFailed = 0;
+        ESP8266_Callback_WifiConnectFailed(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_WifiIPSet && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiIPSet = 0;
+        ESP8266_Callback_WifiIPSet(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_Domain && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_Domain = 0;
+        ESP8266_Callback_DomainIP(ESP8266, &ESP8266->Domain);
+    }
+#if ESP8266_USE_CONNECTED_STATIONS
+    if (ESP8266->Flags.F.Call_ConnectedStationsDetected && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_ConnectedStationsDetected = 0;
+        ESP8266_Callback_ConnectedStationsDetected(ESP8266, &ESP8266->ConnectedStations);
+    }
+#endif
+#if ESP8266_USE_APSEARCH
+    if (ESP8266->Flags.F.Call_WifiDetected && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_WifiDetected = 0;
+        ESP8266_Callback_WifiDetected(ESP8266, &ESP8266_APs);
+    }
+#endif
+#if ESP8266_USE_PING == 1
+    if (ESP8266->Flags.F.Call_PingFinished && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_PingFinished = 0;
+        ESP8266_Callback_PingFinished(ESP8266, &ESP8266->Pinging);
+    }
+#endif
+#if ESP8266_USE_FIRMWAREUPDATE == 1
+    if (ESP8266->Flags.F.Call_FirmwareUpdateStatus && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_FirmwareUpdateStatus = 0;
+        ESP8266_Callback_FirmwareUpdateStatus(ESP8266, ESP8266->FirmwareUpdateStatus);
+    }
+    if (ESP8266->Flags.F.Call_FirmwareUpdateSuccess && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_FirmwareUpdateSuccess = 0;
+        ESP8266_Callback_FirmwareUpdateSuccess(ESP8266);
+    }
+    if (ESP8266->Flags.F.Call_FirmwareUpdateError && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_FirmwareUpdateError = 0;
+        ESP8266_Callback_FirmwareUpdateError(ESP8266);
+    }
+#endif
+#if ESP8266_USE_SNTP
+    if (ESP8266->Flags.F.Call_SNTPOk && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_SNTPOk = 0;
+        ESP8266_Callback_SNTPOk(ESP8266, &ESP8266->SNTP);
+    }
+    if (ESP8266->Flags.F.Call_SNTPError && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
+        ESP8266->Flags.F.Call_SNTPError = 0;
+        ESP8266_Callback_SNTPError(ESP8266);
+    }
+#endif
+}
+
+static
 void ProcessSendData(ESP8266_t* ESP8266) {
-    uint16_t len, max_buff = 2046;
+    uint16_t len, max_buff = ESP8266_MAX_DATA_LEN;
+    char* data;
     ESP8266_Connection_t* Connection = ESP8266->LastConnection;
     
     ESP8266->Flags.F.WaitForWrapper = 0;            		/* Wrapper was found */
     ESP8266->ActiveCommand = ESP8266_COMMAND_SENDDATA;    	/* Go to SENDDATA command as active */
     
-    if (ESP8266_CONNECTION_BUFFER_SIZE < 2046) {    		/* Calculate maximal buffer size */
+    if (ESP8266_CONNECTION_BUFFER_SIZE < ESP8266_MAX_DATA_LEN) {    		/* Calculate maximal buffer size */
         max_buff = ESP8266_CONNECTION_BUFFER_SIZE;    		/* Use maximal possible buffer size */
     }
     
-    if (Connection->Flags.F.Client) {                		/* Get data from user */
-        len = ESP8266_Callback_ClientConnectionSendData(ESP8266, Connection, Connection->Data, max_buff);   /* Get data as client */
+    if (Connection->Flags.F.Blocking) {
+        data = Connection->BlockingData;                    /* Get blocking data */
+        len = Connection->BlockingDataLength;               /* Get blocking data length */
     } else {
-        len = ESP8266_Callback_ServerConnectionSendData(ESP8266, Connection, Connection->Data, max_buff);   /* Get data as server */
+        data = Connection->Data;
+        if (Connection->Flags.F.Client) {                   /* Get data from user */
+            len = ESP8266_Callback_ClientConnectionSendData(ESP8266, Connection, data, max_buff);   /* Get data as client */
+        } else {
+            len = ESP8266_Callback_ServerConnectionSendData(ESP8266, Connection, data, max_buff);   /* Get data as server */
+        }
     }
     
     if (len > max_buff) {                            		/* Check for input data */
         len = max_buff;
     }
     if (len > 0) {                                		    /* If data valid */
-        ESP8266_LL_USARTSend((uint8_t *)Connection->Data, len); /* Send data */
+        ESP8266_LL_USARTSend((uint8_t *)data, len);         /* Send data */
         ESP8266->TotalBytesSent += len;            		    /* Increase number of bytes sent */
     }
     ESP8266_LL_USARTSend((uint8_t *)"\\0", 2);        		/* Send zero at the end even if data are not valid = stop sending data to module */
@@ -636,11 +771,12 @@ void ProcessSendData(ESP8266_t* ESP8266) {
 }
 
 static
-ESP8266_Result_t ESP8266_SetMux(ESP8266_t* ESP8266, uint8_t mux) {
+ESP8266_Result_t SetMux(ESP8266_t* ESP8266, uint8_t mux) {
     char m = (char) mux + '0';
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CIPMUX;        /* Lock active command */
     ESP8266_USARTSENDSTRING("AT+CIPMUX=");                  /* Format command and send */
     ESP8266_USARTSENDCHAR(&m);
     ESP8266_USARTSENDSTRING(ESP8266_CRLF);
@@ -655,9 +791,11 @@ ESP8266_Result_t ESP8266_SetMux(ESP8266_t* ESP8266, uint8_t mux) {
 }
 
 static
-ESP8266_Result_t ESP8266_Setdinfo(ESP8266_t* ESP8266, uint8_t info) {
+ESP8266_Result_t Setdinfo(ESP8266_t* ESP8266, uint8_t info) {
     char i = (char) info + '0';
+    
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CIPDINFO;      /* Lock active command */
     
     ESP8266_USARTSENDSTRING("AT+CIPDINFO=");                /* Format command and send */
     ESP8266_USARTSENDCHAR(&i);
@@ -677,13 +815,15 @@ ESP8266_Result_t ESP8266_Setdinfo(ESP8266_t* ESP8266, uint8_t info) {
 static
 ESP8266_Result_t StartClientConnection(
     ESP8266_t* ESP8266,
+    ESP8266_Connection_t** Conn,
     ESP8266_ConnectionType_t type,
     const char* conn_type,
     const char* name,
     const char* location,
     uint16_t port,
     uint16_t udp_local_port,
-    void* user_parameters
+    void* user_parameters,
+    uint8_t blocking
 ) {
     int8_t conn = -1;
     uint8_t i = 0;
@@ -707,7 +847,8 @@ ESP8266_Result_t StartClientConnection(
     }
     if (conn != -1) {                                		/* Try to assign */
         char tmp[6];
-
+        
+        ESP8266->ActiveCommand = ESP8266_COMMAND_CIPSTART;  /* Lock active command */
         conn += '0';                                		/* Go to ASCII number */
         ESP8266_USARTSENDSTRING("AT+CIPSTART=");    		/* Send separate */
         ESP8266_USARTSENDCHAR(&conn);
@@ -732,6 +873,7 @@ ESP8266_Result_t StartClientConnection(
         conn -= '0';                                		/* Go back from ASCII number to real number */
         ESP8266->Connection[i].Flags.F.Active = 1;    		/* We are active */
         ESP8266->Connection[i].Flags.F.Client = 1;   		/* We are in client mode */
+        ESP8266->Connection[i].Flags.F.Blocking = blocking ? 1 : 0; /* Set blocking mode */
         ESP8266->Connection[i].Type = type;         		/* Set connection type */
         ESP8266->Connection[i].TotalBytesReceived = 0;
         ESP8266->Connection[i].Number = conn;
@@ -743,6 +885,15 @@ ESP8266_Result_t StartClientConnection(
         ESP8266->Connection[i].Name = (char *)name;    		/* Save name */
         ESP8266->Connection[i].UserParameters = user_parameters;	/* Save user parameters pointer */
         
+        if (Conn != NULL) {
+            *Conn = &ESP8266->Connection[i];                /* Save connection to pointer */
+        }
+        if (ESP8266->Connection[i].Flags.F.Blocking) {
+            ESP8266_WaitReady(ESP8266);                     /* Wait till ready when in blocking mode */
+            if (!ESP8266->Flags.F.LastOperationStatus) {
+                ESP8266_RETURNWITHSTATUS(ESP8266, ESP_ERROR);   /* Return error, ESP did not connect to web */
+            }
+        }
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);    		/* Return OK */
     }
     ESP8266_RETURNWITHSTATUS(ESP8266, ESP_ERROR);    		/* Return error */
@@ -762,47 +913,41 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
     
     if (ESP8266->ActiveCommand != ESP8266_COMMAND_IDLE && from_usart_buffer) {	/* First check, if any command is active */
         if (                                        		/* Check if string does not belong to this command */
-            strcmp(Received, ESP8266_RESPONSE_OK) != 0 &&
-            strcmp(Received, "SEND OK\r\n") != 0 &&
-            strcmp(Received, "SEND FAIL\r\n") != 0 &&
-            strcmp(&Received[1], ",CONNECT\r\n") != 0 &&
-            //strcmp(&Received[1], ",CLOSED\r\n") != 0 &&
-            strcmp(Received, ESP8266_RESPONSE_ERROR) != 0 &&
-            strcmp(Received, "ready\r\n") != 0 &&
-            strcmp(Received, "busy p...\r\n") != 0 &&
-            strncmp(Received, "+IPD,", 5) != 0 &&
-            strncmp(Received, ESP8266->ActiveCommandResponse, strlen(ESP8266->ActiveCommandResponse)) != 0
+            ustrcmp(Received, ESP8266_RESPONSE_OK) != 0 &&
+            ustrcmp(Received, "SEND OK\r\n") != 0 &&
+            ustrcmp(Received, "SEND FAIL\r\n") != 0 &&
+            ustrcmp(&Received[1], ",CONNECT\r\n") != 0 &&
+            //ustrcmp(&Received[1], ",CLOSED\r\n") != 0 &&
+            ustrcmp(Received, ESP8266_RESPONSE_ERROR) != 0 &&
+            ustrcmp(Received, "ready\r\n") != 0 &&
+            ustrcmp(Received, "busy p...\r\n") != 0 &&
+            ustrncmp(Received, "+IPD,", 5) != 0 &&
+            ustrncmp(Received, ESP8266->ActiveCommandResponse, ustrlen(ESP8266->ActiveCommandResponse)) != 0
         ) {
             BUFFER_WriteString(&TMP_Buffer, Received);    	/* Save string to temporary buffer, because we received a string which does not belong to this command */            
             return 0;                                		/* Return from function, no remaining bytes to process */
         }
     }
     
-    if (strcmp(Received, "ready\r\n") == 0) {        		/* Device is ready */
-        ESP8266_Callback_DeviceReady(ESP8266);
-    }
-    if (strcmp(Received, "wdt reset\r\n") == 0) {    		/* Device WDT reset */
-        ESP8266_Callback_WatchdogReset(ESP8266);
-    }
-    
-    CallConnectionCallbacks(ESP8266);                		/* Call user callback functions for connections */
-    
-    if (strcmp(Received, "WIFI CONNECTED\r\n") == 0) {    	/* We are connected to Wi-Fi */
-        ESP8266->Flags.F.WifiConnected = 1;            		/* Set flag */
-        ESP8266_Callback_WifiConnected(ESP8266);    		/* Call user callback function */
-    } else if (strcmp(Received, "WIFI DISCONNECT\r\n") == 0) {
-        ESP8266->Flags.F.WifiConnected = 0;            		/* Clear flags */
+    if (ustrcmp(Received, "ready\r\n") == 0) {        		/* Device is ready */
+        ESP8266->Flags.F.Call_DeviceReady = 1;
+    } else if (ustrcmp(Received, "wdt reset\r\n") == 0) {    /* Device WDT reset */
+        ESP8266->Flags.F.Call_WatchdogReset = 1;
+    } else if (ustrcmp(Received, "WIFI CONNECTED\r\n") == 0) {   /* We are connected to Wi-Fi */
+        ESP8266->Flags.F.WifiConnected = 1;
+        ESP8266->Flags.F.Call_WifiConnected = 1;
+    } else if (ustrcmp(Received, "WIFI DISCONNECT\r\n") == 0) {
+        ESP8266->Flags.F.WifiConnected = 0;
         ESP8266->Flags.F.WifiGotIP = 0;
+        ESP8266->Flags.F.Call_WifiDisconnected = 1;
         memset((uint8_t *)&ESP8266->ConnectedWifi, 0, sizeof(ESP8266->ConnectedWifi));	/* Reset connected wifi structure */
         ESP8266_RESET_CONNECTIONS(ESP8266);            		/* Reset all connections */
-        ESP8266_Callback_WifiDisconnected(ESP8266);    		/* Call user callback function */
-    } else if (strcmp(Received, "WIFI GOT IP\r\n") == 0) {
+    } else if (ustrcmp(Received, "WIFI GOT IP\r\n") == 0) {
         ESP8266->Flags.F.WifiGotIP = 1;                		/* Wifi got IP address */
-        ESP8266_Callback_WifiGotIP(ESP8266);        		/* Call user callback function */
-    } else if (strcmp(Received, "DHCP TIMEOUT") == 0) {    
-        ESP8266_Callback_DHCPTimeout(ESP8266);        		/* Call user function */
-    }
-    if (strstr(Received, "SEND OK\r\n") != NULL) {    		/* In case data were send */
+        ESP8266->Flags.F.Call_WifiGotIP = 1;
+    } else if (ustrcmp(Received, "DHCP TIMEOUT") == 0) {
+        ESP8266->Flags.F.Call_DHCPTimeout = 1;
+    } else if (ustrstr(Received, "SEND OK\r\n") != NULL) {   /* In case data were send */
         uint8_t cnt;
         
         ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;    	/* Reset active command so user will be able to call new command in callback function */
@@ -810,15 +955,14 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (ESP8266->Connection[cnt].Flags.F.WaitingSentRespond) {  /* Check for data sent */
                 ESP8266->Connection[cnt].Flags.F.WaitingSentRespond = 0;    /* Reset flag */
                 if (ESP8266->Connection[cnt].Flags.F.Client) {	/* Call user function according to connection type */
-                    ESP8266_Callback_ClientConnectionDataSent(ESP8266, &ESP8266->Connection[cnt]);
+                    ESP8266->Connection[cnt].Flags.F.Call_ClientConnectionDataSent = 1;
                 } else {
-                    ESP8266_Callback_ServerConnectionDataSent(ESP8266, &ESP8266->Connection[cnt]);
+                    ESP8266->Connection[cnt].Flags.F.Call_ServerConnectionDataSent = 1;
                 }
             }
         }
         return 0;
-    }
-    if (strstr(Received, "SEND FAIL\r\n") != NULL) {    	/* In case data were not send */
+    } else if (ustrstr(Received, "SEND FAIL\r\n") != NULL) { /* In case data were not send */
         uint8_t cnt;
         
         ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;    	/* Reset active command so user will be able to call new command in callback function */
@@ -826,68 +970,20 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (ESP8266->Connection[cnt].Flags.F.WaitingSentRespond) {  /* Check for data sent */
                 ESP8266->Connection[cnt].Flags.F.WaitingSentRespond = 0;    /* Reset flag */
                 if (ESP8266->Connection[cnt].Flags.F.Client) {	/* Call user function according to connection type */
-                    ESP8266_Callback_ClientConnectionDataSentError(ESP8266, &ESP8266->Connection[cnt]);
+                    ESP8266->Connection[cnt].Flags.F.Call_ClientConnectionDataSentError = 1;
                 } else {
-                    ESP8266_Callback_ServerConnectionDataSentError(ESP8266, &ESP8266->Connection[cnt]);
+                    ESP8266->Connection[cnt].Flags.F.Call_ServerConnectionDataSentError = 1;
                 }
             }
         }
         return 0;
     }
-    
-    if (bufflen > 10 && (ch_ptr = (char *)mem_mem(&Received[bufflen - 10], 10, ",CONNECT\r\n", 10)) != NULL) {	/* Check if we have a new connection */
-        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];	/* New connection has been made */
-        Conn->Flags.F.Active = 1;
-        Conn->Number = CHAR2NUM(*(ch_ptr - 1));
-        ESP8266->LastConnection = Conn;                     /* Save last connection we operate */
-        
-        if (!Conn->Flags.F.Client) {                        /* Check server status */
-            ESP8266_Callback_ServerConnectionActive(ESP8266, Conn);	/* Connection started as server */
-        } else {
-            /* Process other data in CIPSTART OK response for client */
-        }
-    } else if (strstr(Received, "ALREADY CONNECTED\r\n") != NULL) {	/* Check if already connected */
-        
-        
-    } else if (bufflen > 9 && (ch_ptr = (char *)mem_mem(&Received[bufflen - 9], 9, ",CLOSED\r\n", 9)) != NULL && Received != ch_ptr) {	/* Check if we have a closed connection, check the end of string */
-        uint8_t client, active;
-        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];
-        
-        /* Check if CLOSED statement is on beginning, if not, write it to temporary buffer and leave there */
-        /* If not on beginning of string, probably ,CLOSED was returned after +IPD statement */
-        /* Make string standalone */
-        if (ch_ptr == (Received + 1)) {
-            client = Conn->Flags.F.Client;            		/* Save values */
-            active = Conn->Flags.F.Active;
-            ESP8266_RESET_CONNECTION(ESP8266, Conn);    		/* Connection closed, reset flags now */
-            if (active) {                            		/* Call user function */
-                if (client) {
-                    ESP8266_Callback_ClientConnectionClosed(ESP8266, Conn);	/* Client connection closed */
-                } else {
-                    ESP8266_Callback_ServerConnectionClosed(ESP8266, Conn);	/* Server connection closed */
-                }
-            }
-        } else {
-            BUFFER_Write(&TMP_Buffer, (uint8_t *)(ch_ptr - 1), 10);	/* Write to temporary buffer */
-        }
-    } else if (bufflen > 16 && (ch_ptr = strstr(&Received[bufflen - 15], ",CONNECT FAIL\r\n")) != NULL) {	/* Check if we have a new connection, analyze only last part */
-        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];	/* New connection has been made */
-        ESP8266_RESET_CONNECTION(ESP8266, Conn);
-        Conn->Number = CHAR2NUM(*(ch_ptr - 1));
-        
-        if (Conn->Flags.F.Client) {							/* Call user function according to connection type (client, server) */
-            if (ESP8266->ActiveCommand == ESP8266_COMMAND_CIPSTART) {
-                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;	/* Reset current connection */
-            }
-            ESP8266_Callback_ClientConnectionError(ESP8266, Conn);	/* Connection failed */
-        }
-    }
-    
-    if (strncmp(Received, "+IPD,", 5) == 0) {       		/* Check if +IPD was received with incoming data */
+    if (ustrncmp(Received, "+IPD,", 5) == 0) {       		/* Check if +IPD was received with incoming data */
         uint16_t blength = bufflen;
         uint16_t blength2 = bufflen;
         uint16_t ipd_ptr_org;
         
+        /* +IPD statement here should have data till colon character without actual data for function */
         ESP8266->IPD.InIPD = 1;                   			/* If we are not in IPD mode already, go to IPD mode */
         ESP8266->IPD.USART_Buffer = from_usart_buffer;      /* Save IPD buffer location */
         
@@ -920,24 +1016,61 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
         }
         ipd_ptr++;
         ipd_ptr_org = ipd_ptr;
-        if ((blength - ipd_ptr) > Conn->BytesReceived) {    /* Calculate size of buffer */
-            blength = Conn->BytesReceived + ipd_ptr;
-        }
-        
-        memcpy((uint8_t *)Conn->Data, (uint8_t *)&Received[ipd_ptr], blength - ipd_ptr);    /* Copy content to beginning of buffer */
-        ipd_ptr_org += blength - ipd_ptr;
-        
-        if ((blength - ipd_ptr) > Conn->BytesReceived) {    /* Check for length */
-            Conn->Data[Conn->BytesReceived] = 0;            /* Add zero at the end of string */
-        }
-        ESP8266->IPD.InPtr = ESP8266->IPD.PtrTotal = blength - ipd_ptr; /* Calculate remaining bytes */
-        if (ESP8266->IPD.PtrTotal >= Conn->BytesReceived) { /* Check remaining data */
-            ESP8266->IPD.InIPD = 0;                         /* Not in IPD anymore */
-            Conn->DataSize = ipd_ptr;                       /* Set package data size */
-            Conn->Flags.F.LastPart = 1;
-            Conn->Flags.F.CallDataReceived = 1;             /* Enable flag to call received data callback */
-        }
+        ESP8266->IPD.InPtr = ESP8266->IPD.PtrTotal = 0;     /* Reset values */
+
         return blength2 - (ipd_ptr_org);                    /* Return number of bytes we didn't process in this request */
+    } else if (bufflen > 10 && (ch_ptr = (char *)mem_mem(&Received[bufflen - 10], 10, ",CONNECT\r\n", 10)) != NULL) {	/* Check if we have a new connection */
+        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];	/* New connection has been made */
+        Conn->Flags.F.Active = 1;
+        Conn->Number = CHAR2NUM(*(ch_ptr - 1));
+        ESP8266->LastConnection = Conn;                     /* Save last connection we operate */
+        
+        if (!Conn->Flags.F.Client) {                        /* Check server status */
+            Conn->Flags.F.Call_ServerConnectionActive = 1;
+#if ESP8266_USE_SINGLE_CONNECTION_BUFFER == 1
+            Conn->Data = ConnectionData;
+#endif
+        } else {
+            /* Process other data in CIPSTART OK response for client */
+        }
+    } else if (ustrstr(Received, "ALREADY CONNECTED\r\n") != NULL) {	/* Check if already connected */
+        
+    } else if (bufflen > 9 && (ch_ptr = (char *)mem_mem(&Received[bufflen - 9], 9, ",CLOSED\r\n", 9)) != NULL && Received != ch_ptr) {	/* Check if we have a closed connection, check the end of string */
+        uint8_t client, active;
+        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];
+        
+        /* Check if CLOSED statement is on beginning, if not, write it to temporary buffer and leave there */
+        /* If not on beginning of string, probably ,CLOSED was returned after +IPD statement */
+        /* Make string standalone */
+        if (ch_ptr == (Received + 1)) {
+            client = Conn->Flags.F.Client;            		/* Save values */
+            active = Conn->Flags.F.Active;
+            ESP8266_RESET_CONNECTION(ESP8266, Conn);   		/* Connection closed, reset flags now */
+            if (active) {                            		/* Call user function */
+                if (Conn->Flags.F.Blocking) {
+                    ESP8266->Flags.F.LastOperationStatus = 1;
+                } else {
+                    if (client) {
+                        Conn->Flags.F.Call_ClientConnectionClosed = 1;
+                    } else {
+                        Conn->Flags.F.Call_ServerConnectionClosed = 1;
+                    }
+                }
+            }
+        } else {
+            BUFFER_Write(&TMP_Buffer, (uint8_t *)(ch_ptr - 1), 10);	/* Write to temporary buffer */
+        }
+    } else if (bufflen > 16 && (ch_ptr = ustrstr(&Received[bufflen - 15], ",CONNECT FAIL\r\n")) != NULL) {	/* Check if we have a new connection, analyze only last part */
+        Conn = &ESP8266->Connection[CHAR2NUM(*(ch_ptr - 1))];	/* New connection has been made */
+        ESP8266_RESET_CONNECTION(ESP8266, Conn);
+        Conn->Number = CHAR2NUM(*(ch_ptr - 1));
+        
+        if (Conn->Flags.F.Client) {							/* Call user function according to connection type (client, server) */
+            if (ESP8266->ActiveCommand == ESP8266_COMMAND_CIPSTART) {
+                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;	/* Reset current connection */
+            }
+            Conn->Flags.F.Call_ClientConnectionError = 1;
+        }
     }
     
     switch (ESP8266->ActiveCommand) {                       /* Check commands we have sent */
@@ -946,19 +1079,19 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
                 ESP8266->ActiveCommandResponse = "FAIL\r\n";    /* We received an error, wait for "FAIL" string for next time */
                 ESP8266->WifiConnectError = (ESP8266_WifiConnectError_t)CHAR2NUM(Received[7]);    /* Check reason */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
-            if (strcmp(Received, "FAIL\r\n") == 0) {
-                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */                
-                ESP8266_Callback_WifiConnectFailed(ESP8266);    /* Call user function */
+            if (ustrcmp(Received, "FAIL\r\n") == 0) {
+                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
+                ESP8266->Flags.F.Call_WifiConnectFailed = 1;
             }
             break;
         case ESP8266_COMMAND_CWJAP_GET:
             if (strncmp(Received, "+CWJAP_CUR:", 11) == 0) {    /* We sent command to get current connected AP */
                 ParseCWJAP(ESP8266, Received);              /* Parse string */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
             break;
@@ -967,9 +1100,9 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (strncmp(Received, "+CWLAP:", 7) == 0) {     /* CWLAP received, parse it */
                 ParseCWLAP(ESP8266, Received);              /* Parse CWLAP */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266_Callback_WifiDetected(ESP8266, &ESP8266_APs);   /* Call user function */
+                ESP8266->Flags.F.Call_WifiDetected = 1;
             }
             break;
 #endif
@@ -977,7 +1110,7 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (strncmp(Received, "+CWSAP", 6) == 0) {      /* CWLAP received, parse it */
                 ParseCWSAP(ESP8266, Received);              /* Parse CWLAP */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
             break;
@@ -985,32 +1118,32 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (strncmp(Received, "+CIPSTA", 7) == 0) {     /* CIPSTA detected */
                 ParseCIPSTA(ESP8266, Received);             /* Parse CIPSTA */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266_Callback_WifiIPSet(ESP8266);        /* Callback function */
+                ESP8266->Flags.F.Call_WifiIPSet = 1;
             }
             break;
         case ESP8266_COMMAND_CIPAP:
             if (strncmp(Received, "+CIPAP", 6) == 0) {      /* CIPAP detected */
                 ParseCIPSTA(ESP8266, Received);             /* Parse CIPAP (or CIPSTA) */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */    
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;
             }
             break;
         case ESP8266_COMMAND_CWMODE:
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;
                 ESP8266->Mode = ESP8266->SentMode;          /* Save mode */
             }
             break;
         case ESP8266_COMMAND_CIPSERVER:
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
             break;
         case ESP8266_COMMAND_SEND:
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {    
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_SENDDATA;  /* Go to send data command */
                 ESP8266->Flags.F.WaitForWrapper = 1;        /* Do not reset command, instead, wait for wrapper command! */
                 ESP8266->ActiveCommandResponse = "SEND OK"; /* We are now waiting for SEND OK */
@@ -1019,14 +1152,29 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
         case ESP8266_COMMAND_SENDDATA:
             break;
         case ESP8266_COMMAND_CIPSTART:
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266_Callback_ClientConnectionConnected(ESP8266, ESP8266->LastConnection);	/* Connection started as client */
+                ESP8266->LastConnection->Flags.F.Call_ClientConnectionConnected = 1;
             }
-            if (strcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {    
-                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */        
-                ESP8266_RESET_CONNECTION(ESP8266, &ESP8266->Connection[ESP8266->StartConnectionSent]);   /* Reset connection */
-                ESP8266_Callback_ClientConnectionError(ESP8266, &ESP8266->Connection[ESP8266->StartConnectionSent]);    /* Call user function */
+            if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
+                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
+                ESP8266_RESET_CONNECTION(ESP8266, ESP8266->LastConnection);   /* Reset connection */
+                ESP8266->LastConnection->Flags.F.Call_ClientConnectionError = 1;
+            }
+            break;
+        case ESP8266_COMMAND_CIPDOMAIN:
+            if (strncmp(Received, "+CIPDOMAIN:", 11) == 0) {
+                ParseIP(&Received[11], ESP8266->Domain.IP, NULL);
+            }
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
+                ESP8266->Domain.Successful = 1;
+                ESP8266->Flags.F.Call_Domain = 1;
+            }
+            if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
+                ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
+                ESP8266->Domain.Successful = 0;
+                ESP8266->Flags.F.Call_Domain = 1;
             }
             break;
         case ESP8266_COMMAND_CIPMUX:
@@ -1048,12 +1196,12 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
 #if ESP8266_USE_WPS
         case ESP8266_COMMAND_WPS:
 #endif
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
             break;
         case ESP8266_COMMAND_RST:
-            if (strcmp(Received, "ready\r\n") == 0) {
+            if (ustrcmp(Received, "ready\r\n") == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
                 ESP8266->Flags.F.LastOperationStatus = 1;   /* Set flag */
             }
@@ -1064,14 +1212,14 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
                 /* Parse number for pinging */
                 ESP8266->Pinging.Time = ParseNumber(&Received[1], NULL);
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
                 ESP8266->Pinging.Success = 1;               /* Set status */
-                ESP8266_Callback_PingFinished(ESP8266, &ESP8266->Pinging);  /* Call user function */
-            } else if (strcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
+                ESP8266->Flags.F.Call_PingFinished = 1;
+            } else if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
                 ESP8266->Pinging.Success = 0;               /* Set status */
-                ESP8266_Callback_PingFinished(ESP8266, &ESP8266->Pinging);  /* Call user function */
+                ESP8266->Flags.F.Call_PingFinished = 1;
             }
             break;
 #endif
@@ -1079,15 +1227,16 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (strncmp(Received, "+CIPSTAMAC", 10) == 0) { /* CIPSTA detected */
                 ParseMAC(&Received[12], ESP8266->STAMAC, NULL); /* Parse CIPSTA */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
+
             }
             break;
         case ESP8266_COMMAND_CIPAPMAC:
             if (strncmp(Received, "+CIPAPMAC", 9) == 0) {   /* CIPSTA detected */
                 ParseMAC(&Received[11], ESP8266->APMAC, NULL);  /* Parse CIPSTA */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
             }
             break;
@@ -1098,17 +1247,18 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
                 if (num == 4) {                             /* Check step */
                     ESP8266->Timeout = (unsigned long)10 * ESP8266_TIMEOUT;    /* We are waiting last step, increase timeout */
                 }
-                ESP8266_Callback_FirmwareUpdateStatus(ESP8266, (ESP8266_FirmwareUpdate_t) num);    /* Call user function */
+                ESP8266->FirmwareUpdateStatus = (ESP8266_FirmwareUpdate_t) num;
+                ESP8266->Flags.F.Call_FirmwareUpdateStatus = 1;
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0 || strcmp(Received, "ready\r\n") == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0 || ustrcmp(Received, "ready\r\n") == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266->Timeout = ESP8266_TIMEOUT;         /* Reset timeout */                
-                ESP8266_Callback_FirmwareUpdateSuccess(ESP8266);    /* Call user function */
+                ESP8266->Timeout = ESP8266_TIMEOUT;         /* Reset timeout */            
+                ESP8266->Flags.F.Call_FirmwareUpdateSuccess = 1;
             }
-            if (strcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
+            if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
                 ESP8266->Timeout = ESP8266_TIMEOUT;         /* Reset timeout */
-                ESP8266_Callback_FirmwareUpdateError(ESP8266);    /* Call user function */
+                ESP8266->Flags.F.Call_FirmwareUpdateError = 1;
             }
             break;
 #endif
@@ -1118,9 +1268,9 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
                 ParseCWLIF(ESP8266, Received);              /* Parse response */
             }
         
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Reset active command */
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;
-                ESP8266_Callback_ConnectedStationsDetected(ESP8266, &ESP8266->ConnectedStations);   /* Call user function */
+                ESP8266->Flags.F.Call_ConnectedStationsDetected = 1;
             }
             break;
 #endif
@@ -1129,31 +1279,30 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
             if (strncmp(Received, "+SNTP_UNIX:", 11) == 0) {
                 ESP8266->SNTP.Time = ParseNumber(&Received[11], NULL);    /* Parse time */
             }
-            if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Check for OK */
+            if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {   /* Check for OK */
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266_Callback_SNTPOk(ESP8266, &ESP8266->SNTP);   /* Call user function */
+                ESP8266->Flags.F.Call_SNTPOk = 1;
             }
-            
-            if (strcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {    /* Check for OK */
+            if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0) {    /* Check for OK */
                 ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
-                ESP8266_Callback_SNTPError(ESP8266);        /* Call user function */
+                ESP8266->Flags.F.Call_SNTPError = 1;
             }
 #endif
         default:                                            /* No command was used to send, data received without command */
             break;
     }
     
-    if (strcmp(Received, ESP8266_RESPONSE_OK) == 0) {       /* Set flag for last operation status */
+    if (ustrcmp(Received, ESP8266_RESPONSE_OK) == 0) {       /* Set flag for last operation status */
         ESP8266->Flags.F.LastOperationStatus = 1;
-        
-        if (ESP8266->ActiveCommand != ESP8266_COMMAND_SEND && ESP8266->ActiveCommand != ESP8266_COMMAND_SENDDATA) {
+        if (ESP8266->ActiveCommand != ESP8266_COMMAND_SEND && ESP8266->ActiveCommand != ESP8266_COMMAND_SENDDATA && ESP8266->ActiveCommand != ESP8266_COMMAND_RST ) {
             ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;  /* Reset active command */
         }
     }
-    if (strcmp(Received, ESP8266_RESPONSE_ERROR) == 0 || strcmp(Received, "busy p...\r\n") == 0) {
+    if (ustrcmp(Received, ESP8266_RESPONSE_ERROR) == 0 || ustrcmp(Received, "busy p...\r\n") == 0) {
         ESP8266->Flags.F.LastOperationStatus = 0;
         ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;      /* Reset active command */
-        
+
+
         /* TODO: Check if ERROR here */
     } 
     return 0;                                               /* No remaining bytes to process */
@@ -1162,7 +1311,9 @@ uint32_t ParseReceived(ESP8266_t* ESP8266, char* Received, uint16_t bufflen, uin
 static
 ESP8266_Result_t SendUARTCommand(ESP8266_t* ESP8266, uint32_t baudrate, const char* cmd) {
     char baud[8];
+    
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_UART;          /* Lock active command */
     
     Int2String(baud, baudrate);                             /* Format baudrate */
     
@@ -1196,11 +1347,12 @@ ESP8266_Result_t SendMACCommand(ESP8266_t* ESP8266, uint8_t* addr, const char* c
     uint8_t i = 0;
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = command;                       /* Lock active command */
     
     ESP8266_USARTSENDSTRING((char *)cmd);                   /* Format command and send */
     ESP8266_USARTSENDSTRING("=\"");
     for (i = 0; i < 6; i++) {
-    	usprintf(tmp, "%02x", addr[i]);                      /* Format string */
+        usprintf(tmp, "%02x", addr[i]);                      /* Format string */
         ESP8266_USARTSENDSTRING(tmp);
         if (i < 5) {
             ESP8266_USARTSENDSTRING(":");                   /* Send separator */
@@ -1235,12 +1387,14 @@ ESP8266_Result_t ESP8266_Init(ESP8266_t* ESP8266, uint32_t baudrate) {
     uint8_t i;
     
     ESP8266->Timeout = 0;                                   /* Save settings */    
-    if (BUFFER_Init(&TMP_Buffer, ESP8266_TMPBUFFER_SIZE, TMPBuffer)) {  /* Init temporary buffer */
+    if (BUFFER_Init(&TMP_Buffer, ESP8266_TMPBUFFER_SIZE + 1, TMPBuffer)) {  /* Init temporary buffer */
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_NOHEAP);
     }
-    if (BUFFER_Init(&USART_Buffer, ESP8266_USARTBUFFER_SIZE, USARTBuffer)) {    /* Init USART working */
+    if (BUFFER_Init(&USART_Buffer, ESP8266_USARTBUFFER_SIZE + 1, USARTBuffer)) {    /* Init USART working */
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_NOHEAP);
     }
+    
+    ESP8266->InUpdateTimeout = 1000;                        /* Set timeout for in update waiting */
     
     ESP8266_RESET_INIT;                                     /* Init RESET pin */
     ESP8266_RESET_LOW;                                      /* Set pin low */
@@ -1253,7 +1407,7 @@ ESP8266_Result_t ESP8266_Init(ESP8266_t* ESP8266, uint32_t baudrate) {
     ESP8266_LL_SetRTS(ESP_RTS_LOW);                         /* Set RTS low */
     RTSStatus = ESP_RTS_LOW;
 #endif
-    ESP8266->Timeout = 1000;                                /* Set allowed timeout */
+    ESP8266->Timeout = 3000;                                /* Set allowed timeout */
     
     SendCommand(ESP8266, ESP8266_COMMAND_RST, "AT+RST\r\n", "ready\r\n");   /* Reset device */
     ESP8266_WaitReady(ESP8266);                             /* Wait till idle */
@@ -1261,7 +1415,7 @@ ESP8266_Result_t ESP8266_Init(ESP8266_t* ESP8266, uint32_t baudrate) {
     if (!ESP8266->Flags.F.LastOperationStatus) {            /* Check status */
         for (i = 0; i < sizeof(ESP8266_Baudrate) / sizeof(ESP8266_Baudrate[0]); i++) {  /* Check for baudrate, try with predefined baudrates */
             ESP8266_LL_USARTInit(ESP8266_Baudrate[i]);      /* Init USART */    
-            ESP8266->Timeout = 1000;                        /* Set allowed timeout */        
+            ESP8266->Timeout = 100;                        /* Set allowed timeout */        
             SendCommand(ESP8266, ESP8266_COMMAND_RST, "AT+RST\r\n", "ready\r\n");   /* Reset device */    
             ESP8266_WaitReady(ESP8266);                     /* Wait till idle */
             if (ESP8266->Flags.F.LastOperationStatus) {     /* Check status */
@@ -1270,11 +1424,11 @@ ESP8266_Result_t ESP8266_Init(ESP8266_t* ESP8266, uint32_t baudrate) {
             }
         }
     }
-    
+    ESP8266->Timeout = ESP8266_TIMEOUT;    
     if (!ESP8266->Flags.F.LastOperationStatus) {            /* Check status */    
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_DEVICENOTCONNECTED);  /* Device is not connected */
-    }
-    ESP8266->Timeout = ESP8266_TIMEOUT;                     /* Set allowed timeout to 30sec */
+    }                   /* Set allowed timeout to 30sec */
+    
     SendCommand(ESP8266, ESP8266_COMMAND_AT, "AT\r\n", ESP8266_RESPONSE_OK);    /* Test device */
     ESP8266_WaitReady(ESP8266);                             /* Wait till idle */
     
@@ -1289,8 +1443,8 @@ ESP8266_Result_t ESP8266_Init(ESP8266_t* ESP8266, uint32_t baudrate) {
 #endif
     ESP8266_WaitReady(ESP8266);                             /* Wait till idle */
     
-    while (ESP8266_SetMux(ESP8266, 1) != ESP_OK);           /* Enable multiple connections */
-    while (ESP8266_Setdinfo(ESP8266, 1) != ESP_OK);         /* Enable IP and PORT to be shown on +IPD statement */
+    while (SetMux(ESP8266, 1) != ESP_OK);                   /* Enable multiple connections */
+    while (Setdinfo(ESP8266, 1) != ESP_OK);                 /* Enable IP and PORT to be shown on +IPD statement */
     while (ESP8266_SetMode(ESP8266, ESP8266_Mode_STA_AP) != ESP_OK);    /* Set mode to STA+AP by default */
     while (ESP8266_GetSTAMAC(ESP8266) != ESP_OK);           /* Get station MAC */
     while (ESP8266_GetAPMAC(ESP8266) != ESP_OK);            /* Get softAP MAC */
@@ -1317,7 +1471,20 @@ ESP8266_Result_t ESP8266_DeInit(ESP8266_t* ESP8266) {
 ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
     char ch, Received[128];
     uint8_t lastcmd;
-    uint16_t stringlength, receivedleft;    
+    uint16_t stringlength, receivedleft;
+    
+    if (ESP8266->Flags.F.InUpdate) {                        /* Check if already in update function */
+        uint32_t time = ESP8266->Time;
+        while (1) {
+            if (!ESP8266->Flags.F.InUpdate) {
+                break;
+            }
+            if ((ESP8266->Time - time) > ESP8266->InUpdateTimeout) {
+                return ESP_BUSY;
+            }
+        }
+    }
+    ESP8266->Flags.F.InUpdate = 1;                          /* Go to update */
     
     if (ESP8266->Timeout == 0) {                            /* If timeout is set to 0 */
         ESP8266->Timeout = 30000;
@@ -1325,10 +1492,27 @@ ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
     
     if ((ESP8266->Time - ESP8266->StartTime) > ESP8266->Timeout) {  /* Check timeout */
         lastcmd = ESP8266->ActiveCommand;                   /* Save temporary active command */
-        ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;      /* Timeout reached, reset command */        
+        ESP8266->ActiveCommand = ESP8266_COMMAND_IDLE;      /* Timeout reached, reset command */
         if (lastcmd == ESP8266_COMMAND_CIPSTART) {          /* Timeout reached */
             ESP8266_RESET_CONNECTION(ESP8266, &ESP8266->Connection[ESP8266->StartConnectionSent]);   /* We get timeout on cipstart */
             ESP8266_Callback_ClientConnectionTimeout(ESP8266, &ESP8266->Connection[ESP8266->StartConnectionSent]);  /* Call user function */
+            ESP8266->Flags.F.LastOperationStatus = 0;
+        }
+    }
+    
+    if (!ESP8266->IPD.InIPD) {                              /* Manually check for IPD statements, +IPD format: +IPD,a,bbbb,ccc.ccc.ccc.ccc,ddddd: */
+        int32_t ipd_pos;
+        
+        if (USART_Buffer.Buffer[USART_Buffer.Out] == '+') { /* Check if first character to read is plus sign, small optimization to prevent buffer search all the time */
+            ipd_pos = BUFFER_Find(&USART_Buffer, (uint8_t *)"+IPD,", 5);    /* Try to find +IPD statement in buffer */
+            if (ipd_pos == 0) {                             /* +IPD is on start of buffer read operations */
+                ipd_pos = BUFFER_Find(&USART_Buffer, (uint8_t *)":", 1);
+                if (ipd_pos > 0 && ipd_pos < 35) {         /* Check if colon exists and is in valid range */
+                    stringlength = BUFFER_Read(&USART_Buffer, (uint8_t *)Received, ipd_pos + 1);    /* Read from buffer until colon is received */
+                    Received[stringlength] = 0;             /* Add zero to the end of read string */
+                    ParseReceived(ESP8266, Received, stringlength, 1);    /* Start parsing +IPD statement */
+                }
+            }
         }
     }
     
@@ -1403,22 +1587,6 @@ ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
         }
     }
     
-    if (!ESP8266->IPD.InIPD) {                              /* Manually check for IPD statements, +IPD format: +IPD,a,bbbb,ccc.ccc.ccc.ccc,ddddd: */
-        int32_t ipd_pos;
-        
-        if (USART_Buffer.Buffer[USART_Buffer.Out] == '+') { /* Check if first character to read is plus sign, small optimization to prevent buffer search all the time */
-            ipd_pos = BUFFER_Find(&USART_Buffer, (uint8_t *)"+IPD,", 5);    /* Try to find +IPD statement in buffer */
-            if (ipd_pos == 0) {                             /* +IPD is on start of buffer read operations */
-                ipd_pos = BUFFER_Find(&USART_Buffer, (uint8_t *)":", 1);
-                if (ipd_pos > 0 &&  ipd_pos < 35) {         /* Check if colon exists and is in valid range */
-                    stringlength = BUFFER_Read(&USART_Buffer, (uint8_t *)Received, ipd_pos + 1);    /* Read from buffer until colon is received */
-                    Received[stringlength] = 0;             /* Add zero to the end of read string */
-                    ParseReceived(ESP8266, Received, stringlength, 1);    /* Start parsing +IPD statement */
-                }
-            }
-        }
-    }
-    
     if (ESP8266->IPD.InIPD) {                               /* If we are in IPD mode */
         BUFFER_t* buff;
         if (ESP8266->IPD.USART_Buffer) {                    /* Get proper buffer for operation */
@@ -1428,7 +1596,7 @@ ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
         }
         
         while (                                             /* If anything received */
-            ESP8266->IPD.PtrTotal < ESP8266->Connection[ESP8266->IPD.ConnNumber].BytesReceived &&   /* Until everything received*/
+            ESP8266->IPD.PtrTotal < ESP8266->Connection[ESP8266->IPD.ConnNumber].BytesReceived &&   /* Until everything received */
             BUFFER_GetFull(buff) > 0                        /* Data are available in buffer */
         ) {
             BUFFER_Read(buff, (uint8_t *)&ch, 1);           /* Read from buffer */
@@ -1471,8 +1639,8 @@ ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
             if (                                            /* We have data, lets see if Content-Length exists and save it */
                 ESP8266->Connection[ESP8266->IPD.ConnNumber].Flags.F.FirstPacket &&
                 (
-                    (ptr = strstr(ESP8266->Connection[ESP8266->IPD.ConnNumber].Data, "Content-Length:")) != NULL ||
-                    (ptr = strstr(ESP8266->Connection[ESP8266->IPD.ConnNumber].Data, "content-length:")) != NULL
+                    (ptr = ustrstr(ESP8266->Connection[ESP8266->IPD.ConnNumber].Data, "Content-Length:")) != NULL ||
+                    (ptr = ustrstr(ESP8266->Connection[ESP8266->IPD.ConnNumber].Data, "content-length:")) != NULL
                 )
             ) {
                 ptr += 15;                                  /* Increase pointer and parse number */
@@ -1481,10 +1649,12 @@ ESP8266_Result_t ESP8266_Update(ESP8266_t* ESP8266) {
                 }
                 ESP8266->Connection[ESP8266->IPD.ConnNumber].ContentLength = ParseNumber(ptr, NULL);    /* Parse content length */
             }
-            ESP8266->Connection[ESP8266->IPD.ConnNumber].Flags.F.CallDataReceived = 1;  /* Set flag to trigger callback for data received */
+            ESP8266->Connection[ESP8266->IPD.ConnNumber].Flags.F.Call_DataReceived = 1;  /* Set flag to trigger callback for data received */
         }
     }
     
+    ESP8266->Flags.F.InUpdate = 0;                          /* Clear flag */
+    CallCallbacks(ESP8266);                                 /* Call all callbacks */
     CallConnectionCallbacks(ESP8266);                       /* Call user functions on connections */
     ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);              /* Return OK */
 }
@@ -1500,13 +1670,7 @@ void ESP8266_TimeUpdate(ESP8266_t* ESP8266, uint32_t time_increase) {
 /*          DEVICE READY STATUS           */
 /******************************************/
 ESP8266_Result_t ESP8266_WaitReady(ESP8266_t* ESP8266) {
-    do {                                                    /* Do job */
-        if (ESP8266->Flags.F.WaitForWrapper) {              /* Check for wrapper */
-            if (BUFFER_Find(&USART_Buffer, (uint8_t *)"> ", 2) >= 0) {  /* We have found it, stop execution here */
-                //ESP8266->Flags.F.WaitForWrapper = 0;
-                break;
-            }
-        }
+    do {
         ESP8266_Update(ESP8266);                            /* Update device */
     } while (ESP8266->ActiveCommand != ESP8266_COMMAND_IDLE);
     ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);              /* Return OK */
@@ -1521,11 +1685,13 @@ ESP8266_Result_t ESP8266_IsReady(ESP8266_t* ESP8266) {
 /*            WIFI MANAGEMENT             */
 /******************************************/
 ESP8266_Result_t ESP8266_WifiDisconnect(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE */
     return SendCommand(ESP8266, ESP8266_COMMAND_CWQAP, "AT+CWQAP\r\n", "AT+CWQAP"); /* Send command */
 }
 
 ESP8266_Result_t ESP8266_WifiConnect(ESP8266_t* ESP8266, const char* ssid, const char* pass) {
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CWJAP;         /* Lock active command */
     
     ESP8266_USARTSENDSTRING("AT+CWJAP_CUR=\"");             /* Send commands separate with escape strings */
     EscapeStringAndSend((char *)ssid);
@@ -1538,6 +1704,7 @@ ESP8266_Result_t ESP8266_WifiConnect(ESP8266_t* ESP8266, const char* ssid, const
 
 ESP8266_Result_t ESP8266_WifiConnectDefault(ESP8266_t* ESP8266, const char* ssid, const char* pass) {
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CWJAP;         /* Lock active command */
     
     ESP8266_USARTSENDSTRING("AT+CWJAP_DEF=\"");             /* Send commands separate with escape strings */
     EscapeStringAndSend((char *)ssid);
@@ -1548,7 +1715,8 @@ ESP8266_Result_t ESP8266_WifiConnectDefault(ESP8266_t* ESP8266, const char* ssid
     return SendCommand(ESP8266, ESP8266_COMMAND_CWJAP, NULL, "+CWJAP:");    /* Send command */
 }
 
-ESP8266_Result_t ESP8266_WifiGetConnected(ESP8266_t* ESP8266) {    
+ESP8266_Result_t ESP8266_WifiGetConnected(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     return SendCommand(ESP8266, ESP8266_COMMAND_CWJAP_GET, "AT+CWJAP_CUR?\r\n", "+CWJAP_CUR:");    /* Send command */
 }
 
@@ -1556,6 +1724,7 @@ ESP8266_Result_t ESP8266_WifiGetConnected(ESP8266_t* ESP8266) {
 /*              RESTORE DEVICE            */
 /******************************************/
 ESP8266_Result_t ESP8266_RestoreDefault(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     if (SendCommand(ESP8266, ESP8266_COMMAND_RESTORE, "AT+RESTORE\r\n", "ready\r\n") != ESP_OK) {   /* Send command */
         return ESP8266->Result;
     }
@@ -1574,11 +1743,12 @@ ESP8266_Result_t ESP8266_SetRFPower(ESP8266_t* ESP8266, float pwr) {
     uint32_t intval = (int)((float)pwr * (float)4.0);
     char num[3];
     
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE status */
-    
     if (intval > ESP8266_MAX_RFPWR) {                       /* Check parameters first */
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_INVALIDPARAMETERS);
     }
+    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE status */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_RFPOWER;       /* Lock active command */
     
     Int2String(num, intval);                                /* Format number to string */
     ESP8266_USARTSENDSTRING("AT+RFPOWER=");                 /* Send command */
@@ -1598,6 +1768,7 @@ ESP8266_Result_t ESP8266_SetRFPower(ESP8266_t* ESP8266, float pwr) {
 #if ESP8266_USE_FIRMWAREUPDATE
 ESP8266_Result_t ESP8266_FirmwareUpdate(ESP8266_t* ESP8266) {
     ESP8266_CHECK_WIFICONNECTED(ESP8266);                   /* Check connected */
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
     return SendCommand(ESP8266, ESP8266_COMMAND_CIUPDATE, "AT+CIUPDATE\r\n", "+CIPUPDATE:");    /* Send command if possible */
 }
 #endif
@@ -1606,10 +1777,12 @@ ESP8266_Result_t ESP8266_FirmwareUpdate(ESP8266_t* ESP8266) {
 /*              UART SETTINGS             */
 /******************************************/
 ESP8266_Result_t ESP8266_SetUART(ESP8266_t* ESP8266, uint32_t baudrate) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
     return SendUARTCommand(ESP8266, baudrate, "AT+UART_CUR");   /* Set current baudrate */
 }
 
 ESP8266_Result_t ESP8266_SetUARTDefault(ESP8266_t* ESP8266, uint32_t baudrate) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
     return SendUARTCommand(ESP8266, baudrate, "AT+UART_DEF");   /* Set default baudrate */
 }
 
@@ -1619,7 +1792,9 @@ ESP8266_Result_t ESP8266_SetUARTDefault(ESP8266_t* ESP8266, uint32_t baudrate) {
 ESP8266_Result_t ESP8266_SetSleepMode(ESP8266_t* ESP8266, ESP8266_SleepMode_t SleepMode) {
     uint8_t sleep = (uint8_t) SleepMode;
     
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle mode */    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle mode */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_SLEEP;         /* Lock active command */
+    
     sleep += '0';                                           /* Go to ASCII */
     ESP8266_USARTSENDSTRING("AT+SLEEP=");                   /* Send command */
     ESP8266_USARTSENDCHAR(&sleep);
@@ -1633,6 +1808,7 @@ ESP8266_Result_t ESP8266_Sleep(ESP8266_t* ESP8266, uint32_t Milliseconds) {
     char tmp[10];
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle mode */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_GSLP;          /* Lock active command */
     
     Int2String(tmp, Milliseconds);                          /* Format string from milliseconds */
     ESP8266_USARTSENDSTRING("AT+GSLP=");                    /* Send sleep values to module */
@@ -1650,6 +1826,7 @@ ESP8266_Result_t ESP8266_SetMode(ESP8266_t* ESP8266, ESP8266_Mode_t Mode) {
     uint8_t m = (uint8_t) Mode;
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE mode */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CWMODE;        /* Lock active command */
     
     m += '0';                                               /* Go to ASCII number */
     ESP8266_USARTSENDSTRING("AT+CWMODE_CUR=");              /* Send command */
@@ -1673,7 +1850,9 @@ ESP8266_Result_t ESP8266_SetMode(ESP8266_t* ESP8266, ESP8266_Mode_t Mode) {
 /******************************************/
 ESP8266_Result_t ESP8266_RequestSendData(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
     uint8_t num;
+    
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_SEND;          /* Lock active command */
     
     num = Connection->Number + '0';                         /* Go to ASCII */
     
@@ -1689,12 +1868,55 @@ ESP8266_Result_t ESP8266_RequestSendData(ESP8266_t* ESP8266, ESP8266_Connection_
     return ESP8266->Result;                                 /* Return from function */
 }
 
+ESP8266_Result_t ESP8266_RequestSendData_Blocking(ESP8266_t* ESP8266, ESP8266_Connection_t* Conn, const char* Data, uint32_t length) {
+    uint8_t blocking;
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
+    
+    if (Conn == NULL || !Conn->Flags.F.Active) {
+        ESP8266_RETURNWITHSTATUS(ESP8266, ESP_INVALIDPARAMETERS);   /* Check input parameters */
+    }
+    if (length > ESP8266_MAX_DATA_LEN) {
+        uint32_t len;
+        do {
+            if (length > ESP8266_MAX_DATA_LEN) {            /* Calculate length to send */
+                len = ESP8266_MAX_DATA_LEN;
+            } else {
+                len = length;
+            }
+            if (ESP8266_RequestSendData_Blocking(ESP8266, Conn, Data, len) != ESP_OK) { /* Try to send blocking */
+                return ESP8266->Result;
+            }
+            Data += len;                                    /* Calculate new values */
+            length -= len;
+        } while (length > 0);
+        ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);          /* Check input parameters */
+    }
+    
+    blocking = Conn->Flags.F.Blocking;
+    Conn->Flags.F.Blocking = 1;                             /* Set as blocking */
+    Conn->BlockingData = (char *)Data;                      /* Set pointer to blocking data */
+    Conn->BlockingDataLength = length;                      /* Set blocking data length */
+    
+    if (ESP8266_RequestSendData(ESP8266, Conn) != ESP_OK) { /* Start connection send */
+        Conn->Flags.F.Blocking = blocking;                  /* Reset status */
+        return ESP8266->Result;
+    }
+    
+    ESP8266_WaitReady(ESP8266);                             /* Wait till command is active */
+    
+    Conn->Flags.F.Blocking = blocking;                      /* Reset status */
+    return ESP8266->Result;
+}
+
 /******************************************/
 /*         CONNECTIONS MANAGEMENT         */
 /******************************************/
 ESP8266_Result_t ESP8266_CloseConnection(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
     uint8_t num;
+    
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CLOSE;         /* Lock active command */
+    
     num = Connection->Number + '0';                         /* Go to ASCII */
     
     ESP8266_USARTSENDSTRING("AT+CIPCLOSE=");                /* Format command and send */
@@ -1704,7 +1926,40 @@ ESP8266_Result_t ESP8266_CloseConnection(ESP8266_t* ESP8266, ESP8266_Connection_
     return SendCommand(ESP8266, ESP8266_COMMAND_CLOSE, NULL, NULL); /* Send command */
 }
 
+ESP8266_Result_t ESP8266_CloseConnection_Blocking(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
+    uint8_t blocking;
+    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
+
+    blocking = Connection->Flags.F.Blocking;
+    Connection->Flags.F.Blocking = 1;                       /* Set as blocking */
+    
+    if (ESP8266_CloseConnection(ESP8266, Connection) != ESP_OK) {
+        Connection->Flags.F.Blocking = blocking;
+        return ESP8266->Result;
+    }
+    
+    ESP8266_WaitReady(ESP8266);                             /* Wait till done */
+    if (ESP8266->Flags.F.LastOperationStatus) {
+        ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);
+    }
+    return ESP8266->Result;                                 /* Return status */
+}
+
+ESP8266_Result_t ESP8266_WaitClosedConnection(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection, uint32_t Timeout) {
+    uint32_t start = ESP8266->Time;
+    
+    while (Connection->Flags.F.Active) {                    /* Process if connection is active */
+        if ((ESP8266->Time - start) > Timeout) {            
+            ESP8266_RETURNWITHSTATUS(ESP8266, ESP_TIMEOUT); /* Timeout reached */
+        }
+        ESP8266_Update(ESP8266);                            /* Process update */
+    }
+    return ESP8266->Result;                                 /* Return status */
+}
+
 ESP8266_Result_t ESP8266_CloseAllConnections(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
     return SendCommand(ESP8266, ESP8266_COMMAND_CLOSE, "AT+CIPCLOSE=5\r\n", NULL);  /* Send command */
 }
 
@@ -1728,6 +1983,7 @@ ESP8266_Result_t ESP8266_SetWPS(ESP8266_t* ESP8266, ESP8266_WPS_t wps) {
     char w = (char) wps + '0';
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_WPS;           /* Lock active command */
     
     ESP8266_USARTSENDSTRING("AT+WPS=");                     /* Format command and send */
     ESP8266_USARTSENDCHAR(&w);
@@ -1747,6 +2003,7 @@ ESP8266_Result_t ESP8266_ServerEnable(ESP8266_t* ESP8266, uint16_t port) {
     char port_str[7];
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CIPSERVER;     /* Lock active command */
     
     Int2String(port_str, port);                             /* Convert to string */
     ESP8266_USARTSENDSTRING("AT+CIPSERVER=1,");             /* Format string and send */
@@ -1765,6 +2022,7 @@ ESP8266_Result_t ESP8266_ServerEnable(ESP8266_t* ESP8266, uint16_t port) {
 }
 
 ESP8266_Result_t ESP8266_ServerDisable(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     if (SendCommand(ESP8266, ESP8266_COMMAND_CIPSERVER, "AT+CIPSERVER=0\r\n", NULL) != ESP_OK) {    /* Send command and wait */
         return ESP8266->Result;
     }
@@ -1779,6 +2037,7 @@ ESP8266_Result_t ESP8266_SetServerTimeout(ESP8266_t* ESP8266, uint16_t timeout) 
     char timeout_str[7];
     
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CIPSTO;        /* Lock active command */
     
     Int2String(timeout_str, timeout);                       /* Convert to string */
     
@@ -1811,7 +2070,8 @@ ESP8266_Result_t ESP8266_GetAPIPBlocking(ESP8266_t* ESP8266) {
     return ESP8266_WaitReady(ESP8266);                      /* Wait till command end */
 }
 
-ESP8266_Result_t ESP8266_GetSTAIP(ESP8266_t* ESP8266) {    
+ESP8266_Result_t ESP8266_GetSTAIP(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     SendCommand(ESP8266, ESP8266_COMMAND_CIPSTA, "AT+CIPSTA_CUR?\r\n", "+CIPSTA_CUR");  /* Send command */
     if (ESP8266->Result == ESP_OK) {                        /* Check status */
         ESP8266->Flags.F.STAIPIsSet = 0;                    /* Reset flags */
@@ -1821,7 +2081,8 @@ ESP8266_Result_t ESP8266_GetSTAIP(ESP8266_t* ESP8266) {
     return ESP8266->Result;                                 /* Return status */
 }
 
-ESP8266_Result_t ESP8266_GetAPIP(ESP8266_t* ESP8266) {    
+ESP8266_Result_t ESP8266_GetAPIP(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     SendCommand(ESP8266, ESP8266_COMMAND_CIPAP, "AT+CIPAP_CUR?\r\n", "+CIPAP_CUR"); /* Send command */
     if (ESP8266->Result == ESP_OK) {                        /* Check status */
         ESP8266->Flags.F.APIPIsSet = 0;                     /* Reset flags */
@@ -1835,6 +2096,7 @@ ESP8266_Result_t ESP8266_GetAPIP(ESP8266_t* ESP8266) {
 /*            MAC MANIPULATION            */
 /******************************************/
 ESP8266_Result_t ESP8266_GetSTAMAC(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     SendCommand(ESP8266, ESP8266_COMMAND_CIPSTAMAC, "AT+CIPSTAMAC?\r\n", "+CIPSTAMAC"); /* Send command */
     if (ESP8266->Result == ESP_OK) {                        /* Check status */
         ESP8266->Flags.F.STAMACIsSet = 0;                   /* Reset flags */
@@ -1843,16 +2105,17 @@ ESP8266_Result_t ESP8266_GetSTAMAC(ESP8266_t* ESP8266) {
 }
 
 ESP8266_Result_t ESP8266_SetSTAMAC(ESP8266_t* ESP8266, uint8_t* addr) {
-    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     return SendMACCommand(ESP8266, addr, "AT+CIPSTAMAC_CUR", ESP8266_COMMAND_CIPSTAMAC);    /* Send current MAC command */
 }
 
 ESP8266_Result_t ESP8266_SetSTAMACDefault(ESP8266_t* ESP8266, uint8_t* addr) {
-    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     return SendMACCommand(ESP8266, addr, "AT+CIPSTAMAC_DEF", ESP8266_COMMAND_CIPSTAMAC);    /* Send current MAC command */
 }
 
 ESP8266_Result_t ESP8266_GetAPMAC(ESP8266_t* ESP8266) {    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     SendCommand(ESP8266, ESP8266_COMMAND_CIPAPMAC, "AT+CIPAPMAC?\r\n", "+CIPAPMAC");    /* Send command */
     if (ESP8266->Result == ESP_OK) {                        /* Check status */
         ESP8266->Flags.F.APMACIsSet = 0;                    /* Reset flags */
@@ -1861,10 +2124,12 @@ ESP8266_Result_t ESP8266_GetAPMAC(ESP8266_t* ESP8266) {
 }
 
 ESP8266_Result_t ESP8266_SetAPMAC(ESP8266_t* ESP8266, uint8_t* addr) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     return SendMACCommand(ESP8266, addr, "AT+CIPAPMAC_CUR", ESP8266_COMMAND_CIPAPMAC);  /* Send current MAC command */
 }
 
 ESP8266_Result_t ESP8266_SetAPMACDefault(ESP8266_t* ESP8266, uint8_t* addr) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     return SendMACCommand(ESP8266, addr, "AT+CIPAPMAC_DEF", ESP8266_COMMAND_CIPAPMAC);  /* Send current MAC command */
 }
 
@@ -1873,12 +2138,15 @@ ESP8266_Result_t ESP8266_SetAPMACDefault(ESP8266_t* ESP8266, uint8_t* addr) {
 /******************************************/
 #if ESP8266_USE_APSEARCH
 ESP8266_Result_t ESP8266_ListWifiStations(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
+    
     ESP8266_APs.Count = 0;                                  /* Reset pointer */
     return SendCommand(ESP8266, ESP8266_COMMAND_CWLAP, "AT+CWLAP\r\n", "+CWLAP");   /* Send list command */    
 }
 #endif
 
 ESP8266_Result_t ESP8266_GetAP(ESP8266_t* ESP8266) {
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     if (SendCommand(ESP8266, ESP8266_COMMAND_CWSAP, "AT+CWSAP?\r\n", "+CWSAP") != ESP_OK) { /* Send command to read current AP settings */
         return ESP8266->Result;
     }
@@ -1889,22 +2157,23 @@ ESP8266_Result_t ESP8266_SetAP(ESP8266_t* ESP8266, ESP8266_APConfig_t* ESP8266_C
     uint8_t ecn, maxc, hid, sep = ',';
     char ch[4];
 
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
     if (                                                    /* Check input values */
-        strlen(ESP8266_Config->SSID) > 64 ||
-        strlen(ESP8266_Config->Pass) > 64 ||
-        (ESP8266_Config->Ecn != ESP8266_Ecn_OPEN && strlen(ESP8266_Config->Pass) < 8) ||
+        ustrlen(ESP8266_Config->SSID) > 64 ||
+        ustrlen(ESP8266_Config->Pass) > 64 ||
+        (ESP8266_Config->Ecn != ESP8266_Ecn_OPEN && ustrlen(ESP8266_Config->Pass) < 8) ||
         ESP8266_Config->Ecn == ESP8266_Ecn_WEP ||
         ESP8266_Config->MaxConnections < 1 || ESP8266_Config->MaxConnections > 4
     ) {
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_ERROR);       /* Error */
     }
     
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CWSAP;         /* Lock active command */
+    
     Int2String(ch, ESP8266_Config->Channel);                /* Format number to string */
     ecn = (uint8_t)ESP8266_Config->Ecn + '0';
     maxc = (uint8_t)ESP8266_Config->MaxConnections + '0';
     hid = (uint8_t)ESP8266_Config->Hidden + '0';
-    
     
     ESP8266_USARTSENDSTRING("AT+CWSAP_CUR=\"");             /* Send separate values */
     EscapeStringAndSend(ESP8266_Config->SSID);
@@ -1928,16 +2197,18 @@ ESP8266_Result_t ESP8266_SetAPDefault(ESP8266_t* ESP8266, ESP8266_APConfig_t* ES
     uint8_t ecn, maxc, hid, sep = ',';
     char ch[4];
     
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
     if (                                                    /* Check input values */
-        strlen(ESP8266_Config->SSID) > 64 ||
-        strlen(ESP8266_Config->Pass) > 64 ||
-        (ESP8266_Config->Ecn != ESP8266_Ecn_OPEN && strlen(ESP8266_Config->Pass) < 8) ||
+        ustrlen(ESP8266_Config->SSID) > 64 ||
+        ustrlen(ESP8266_Config->Pass) > 64 ||
+        (ESP8266_Config->Ecn != ESP8266_Ecn_OPEN && ustrlen(ESP8266_Config->Pass) < 8) ||
         ESP8266_Config->Ecn == ESP8266_Ecn_WEP ||
         ESP8266_Config->MaxConnections < 1 || ESP8266_Config->MaxConnections > 4
     ) {
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_ERROR);       /* Error */
     }
+    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CWSAP;         /* Lock active command */
 
     Int2String(ch, ESP8266_Config->Channel);                /* Go to ASCII */
     ecn = (uint8_t)ESP8266_Config->Ecn + '0';
@@ -1975,7 +2246,9 @@ ESP8266_Result_t ESP8266_GetConnectedStations(ESP8266_t* ESP8266) {
 
 ESP8266_Result_t ESP8266_SetAutoConnect(ESP8266_t* ESP8266, ESP8266_AutoConnect_t Autoconn) {
     char c = (uint8_t)Autoconn + '0';
+    
     ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_AUTOCONN;      /* Lock active command */
     
     ESP8266_USARTSENDSTRING("AT+CWAUTOCONN=");              /* Format command and send */
     ESP8266_USARTSENDCHAR(&c);
@@ -1989,27 +2262,40 @@ ESP8266_Result_t ESP8266_SetAutoConnect(ESP8266_t* ESP8266, ESP8266_AutoConnect_
 /*               TCP CLIENT               */
 /******************************************/
 ESP8266_Result_t ESP8266_StartClientConnectionTCP(ESP8266_t* ESP8266, const char* name, char* location, uint16_t port, void* user_parameters) {
-    return StartClientConnection(ESP8266, ESP8266_ConnectionType_TCP, "TCP", name, location, port, 0, user_parameters);
+    return StartClientConnection(ESP8266, NULL, ESP8266_ConnectionType_TCP, "TCP", name, location, port, 0, user_parameters, 0);
+}
+
+ESP8266_Result_t ESP8266_StartClientConnectionTCP_Blocking(ESP8266_t* ESP8266, ESP8266_Connection_t** Conn, const char* name, char* location, uint16_t port, void* user_parameters) {
+    return StartClientConnection(ESP8266, Conn, ESP8266_ConnectionType_TCP, "TCP", name, location, port, 0, user_parameters, 1);
 }
 
 /******************************************/
 /*               UDP CLIENT               */
 /******************************************/
 ESP8266_Result_t ESP8266_StartClientConnectionUDP(ESP8266_t* ESP8266, const char* name, char* location, uint16_t port, uint16_t local_port, void* user_parameters) {
-    return StartClientConnection(ESP8266, ESP8266_ConnectionType_UDP, "UDP", name, location, port, local_port, user_parameters);
+    return StartClientConnection(ESP8266, NULL, ESP8266_ConnectionType_UDP, "UDP", name, location, port, local_port, user_parameters, 0);
+}
+
+ESP8266_Result_t ESP8266_StartClientConnectionUDP_Blocking(ESP8266_t* ESP8266, ESP8266_Connection_t** Conn, const char* name, char* location, uint16_t port, uint16_t local_port, void* user_parameters) {
+    return StartClientConnection(ESP8266, Conn, ESP8266_ConnectionType_UDP, "UDP", name, location, port, local_port, user_parameters, 1);
 }
 
 /******************************************/
 /*               SSL CLIENT               */
 /******************************************/
 ESP8266_Result_t ESP8266_StartClientConnectionSSL(ESP8266_t* ESP8266, const char* name, const char* location, uint16_t port, void* user_parameters) {
-    return StartClientConnection(ESP8266, ESP8266_ConnectionType_SSL, "SSL", name, location, port, 0, user_parameters);
+    return StartClientConnection(ESP8266, NULL, ESP8266_ConnectionType_SSL, "SSL", name, location, port, 0, user_parameters, 0);
+}
+
+ESP8266_Result_t ESP8266_StartClientConnectionSSL_Blocking(ESP8266_t* ESP8266, ESP8266_Connection_t** Conn, const char* name, char* location, uint16_t port, void* user_parameters) {
+    return StartClientConnection(ESP8266, Conn, ESP8266_ConnectionType_SSL, "SSL", name, location, port, 0, user_parameters, 1);
 }
 
 ESP8266_Result_t ESP8266_SetSSLBufferSize(ESP8266_t* ESP8266, uint16_t buffersize) {
     char buff[6];
     
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check if IDLE */
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_SSLBUFFERSIZE; /* Lock active command */
     
     Int2String(buff, buffersize);                           /* Format to string */
     
@@ -2022,12 +2308,36 @@ ESP8266_Result_t ESP8266_SetSSLBufferSize(ESP8266_t* ESP8266, uint16_t buffersiz
 }
 
 /******************************************/
+/*               CIP DOMAIN               */
+/******************************************/
+ESP8266_Result_t ESP8266_GetDomainIP(ESP8266_t* ESP8266, const char* domain) {   
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_CIPDOMAIN;     /* Lock active command */
+    
+    ESP8266->Domain.Domain = domain;                         /* Save values */
+    memset(ESP8266->Domain.IP, 0, 4);
+    
+    ESP8266_USARTSENDSTRING("AT+CIPDOMAIN=\"");             /* Format command and send */
+    ESP8266_USARTSENDSTRING(domain);
+    ESP8266_USARTSENDSTRING("\"");
+    ESP8266_USARTSENDSTRING(ESP8266_CRLF);
+    
+    if (SendCommand(ESP8266, ESP8266_COMMAND_CIPDOMAIN, NULL, "+CIPDOMAIN") != ESP_OK) {    /* Send command */
+        return ESP8266->Result;
+    }
+    
+    ESP8266_RETURNWITHSTATUS(ESP8266, ESP_OK);
+}
+
+/******************************************/
 /*              PING SUPPORT              */
 /******************************************/
 #if ESP8266_USE_PING == 1
 ESP8266_Result_t ESP8266_Ping(ESP8266_t* ESP8266, const char* addr) {
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check idle */
     ESP8266_CHECK_WIFICONNECTED(ESP8266);                   /* Device must be connected to wifi */
+
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_PING;          /* Lock active command */
     
     ESP8266->Pinging.Address = (char *)addr;                /* Save ping address information */
     ESP8266->Pinging.Success = 0;                           /* Reset flag */
@@ -2048,10 +2358,13 @@ ESP8266_Result_t ESP8266_Ping(ESP8266_t* ESP8266, const char* addr) {
 /******************************************/
 #if ESP8266_USE_SNTP == 1
 ESP8266_Result_t ESP8266_SNTPSetServer(ESP8266_t* ESP8266, uint8_t num, const char* servername) {
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check if IDLE */
     if (num > 2 || servername == NULL) {                    /* Check input parameters */
         ESP8266_RETURNWITHSTATUS(ESP8266, ESP_INVALIDPARAMETERS);
     }
+    
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
+    ESP8266->ActiveCommand = ESP8266_COMMAND_SNTP_SET;      /* Lock active command */
+    
     num += '0';                                             /* Go to ASCII */
     ESP8266_USARTSENDSTRING("AT+SNTP=");                    /* Format and send command */
     ESP8266_USARTSENDCHAR(&num);
@@ -2065,8 +2378,8 @@ ESP8266_Result_t ESP8266_SNTPSetServer(ESP8266_t* ESP8266, uint8_t num, const ch
 }
 
 ESP8266_Result_t ESP8266_SNTPGetDateTime(ESP8266_t* ESP8266) {
-    ESP8266_CHECK_IDLE(ESP8266);                            /* Check if IDLE */
     ESP8266_CHECK_WIFICONNECTED(ESP8266);                   /* Check if connected to network */
+    ESP8266_CHECK_IDLE(ESP8266);                            /* Check IDLE state */
     return SendCommand(ESP8266, ESP8266_COMMAND_SNTP, "AT+SNTP\r\n", "+SNTP");  /* Send command */
 }
 #endif
@@ -2090,11 +2403,10 @@ uint16_t ESP8266_DataReceived(uint8_t* ch, uint16_t count) {
 }
 
 #define _STELLARIS_LAUNCHPAD_
+
 #ifdef _STELLARIS_LAUNCHPAD_
 	#define __weak
-#endif
-
-/******************************************/
+#endif/******************************************/
 /*                CALLBACKS               */
 /******************************************/
 /* Called when ready string detected */
@@ -2264,6 +2576,13 @@ __weak void ESP8266_Callback_ClientConnectionClosed(ESP8266_t* ESP8266, ESP8266_
     */
 }
 
+/* Called on CIPDOMAIN request */
+__weak void ESP8266_Callback_DomainIP(ESP8266_t* ESP8266, ESP8266_Domain_t* Domain) {
+    /* NOTE: This function Should not be modified, when the callback is needed,
+           the ESP8266_Callback_DomainIP could be implemented in the user file
+    */
+}
+
 #if ESP8266_USE_PING == 1
 /* Called when pinging started */
 __weak void ESP8266_Callback_PingStarted(ESP8266_t* ESP8266, const char* address) {
@@ -2363,4 +2682,3 @@ __weak void ESP8266_Callback_SNTPError(ESP8266_t* ESP8266) {
 #pragma WEAK(ESP8266_Callback_SNTPError)
 
 #endif
-
