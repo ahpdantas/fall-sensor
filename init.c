@@ -16,11 +16,12 @@
 #include "driverlib/adc.h"
 #include "driverlib/uart.h"
 #include "utils/uartstdio.h"
-#include "init.h"
+#include "config.h"
+#include "fallsensor.h"
+#include "wifi.h"
+#include "filesystem.h"
 #include "rtc.h"
 
-char UARTRecBuffer[128];
-ESP8266_t ESP8266;
 
 void initGpios()
 {
@@ -54,7 +55,6 @@ void initTimer1()
 	TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
 	IntEnable(INT_TIMER1A);
 
-	//IntMasterEnable();
 	TimerEnable(TIMER1_BASE,TIMER_A);
 
 }
@@ -100,10 +100,17 @@ void initUART1()
 	UARTStdioInitExpClk(1,115200);
 }
 
-void init()
+void init(FallSensorDef* Fall)
 {
-	ESP8266_Result_t result;
 	//configure the system clock to run at 40MHz
+	Fall->state.save = OPEN_FILE;
+	Fall->state.send = OPEN_CONNECTION;
+	Fall->amost.flgs.Active = 0;
+	Fall->amost.buff.size = sizeof(*Fall->amost.buff.values)*sizeof(AMOST_BUFFER_SIZE);
+	Fall->amost.buff.values[0] = malloc(Fall->amost.buff.size);
+	Fall->amost.buff.values[1] = malloc(Fall->amost.buff.size);
+	Fall->flgs.IsReadyToSave = 0;
+
 	SysCtlClockSet(SYSCTL_SYSDIV_5|SYSCTL_USE_PLL|SYSCTL_XTAL_16MHZ|SYSCTL_OSC_MAIN);
 	initGpios();
 	initADC0();
@@ -111,45 +118,8 @@ void init()
 	initTimer1();
 	initRTC();
 	initUART1();
-	while( (result = ESP8266_Init(&ESP8266,115200)) != ESP_OK ){
-		UARTprintf("Initializing not completed. Result: %d\n", result);
-	}
-
-	ESP8266_WaitReady(&ESP8266);
-
-	ESP8266_SetAutoConnect(&ESP8266,ESP8266_AutoConnect_Off);
-
-	ESP8266_WaitReady(&ESP8266);
-
-	while (ESP8266_SetMode(&ESP8266, ESP8266_Mode_STA_AP) != ESP_OK);
-
-
-	/* Disconnect from wifi if connected */
-	//ESP8266_WifiDisconnect(&ESP8266);
-
-	/* Wait till finish */
-	ESP8266_WaitReady(&ESP8266);
-
-	/* Get a list of all stations */
-	ESP8266_ListWifiStations(&ESP8266);
-
-	/* Wait till finish */
-	ESP8266_WaitReady(&ESP8266);
-
-	/* Connect to wifi and save settings */
-	ESP8266_WifiConnect(&ESP8266, "ANDRE_WIFI", "gr68ci49");
-
-	/* Wait till finish */
-	ESP8266_WaitReady(&ESP8266);
-
-	/* Get connected devices */
-	ESP8266_WifiGetConnected(&ESP8266);
-
-	/* Wait till finish */
-	ESP8266_WaitReady(&ESP8266);
-
-	UARTprintf("Initialization completed\n");
-
+	initFS(&Fall->FatFs);
+	initESP8266(&Fall->ESP8266);
 
 }
 
