@@ -19,9 +19,8 @@
 #include "config.h"
 #include "fallsensor.h"
 #include "wifi.h"
-#include "filesystem.h"
 #include "rtc.h"
-
+#include "file.h"
 
 void initGpios()
 {
@@ -100,15 +99,15 @@ void initUART1()
 	UARTStdioInitExpClk(1,115200);
 }
 
-void init(FallSensorDef* Fall)
+void init(FALL_SENSOR_DEF* Fall)
 {
 	//configure the system clock to run at 40MHz
 	Fall->state.save = OPEN_FILE;
 	Fall->state.send = OPEN_CONNECTION;
 	Fall->amost.flgs.Active = 0;
-	Fall->amost.buff.size = sizeof(*Fall->amost.buff.values)*sizeof(AMOST_BUFFER_SIZE);
-	Fall->amost.buff.values[0] = malloc(Fall->amost.buff.size);
-	Fall->amost.buff.values[1] = malloc(Fall->amost.buff.size);
+	Fall->amost.buff.active = Fall->amost.buff._0;
+	Fall->amost.buff.toSave = Fall->amost.buff._1;
+	Fall->amost.buff.size = sizeof(*Fall->amost.buff._0)*sizeof(AMOST_BUFFER_SIZE);
 	Fall->flgs.IsReadyToSave = 0;
 
 	SysCtlClockSet(SYSCTL_SYSDIV_5|SYSCTL_USE_PLL|SYSCTL_XTAL_16MHZ|SYSCTL_OSC_MAIN);
@@ -118,7 +117,7 @@ void init(FallSensorDef* Fall)
 	initTimer1();
 	initRTC();
 	initUART1();
-	initFS(&Fall->FatFs);
+	initVolume(&Fall->FdFs);
 	initESP8266(&Fall->ESP8266);
 
 }

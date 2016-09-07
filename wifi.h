@@ -12,6 +12,6 @@
 #include "esp8266/esp8266.h"
 
 void initESP8266(ESP8266_t* ESP8266);
-void ESP8266Handler( FallSensorDef* Fall );
+void ESP8266Handler( FALL_SENSOR_DEF* Fall );
 
 #endif /* WIFI_H_ */

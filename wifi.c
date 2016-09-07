@@ -9,7 +9,7 @@
 #include "utils/uartstdio.h"
 
 void initESP8266(ESP8266_t* ESP8266);
-void ESP8266Handler( FallSensorDef* Fall );
+void ESP8266Handler( FALL_SENSOR_DEF* Fall );
 /*
 void SendSensorsData()
 {
@@ -87,7 +87,7 @@ void initESP8266(ESP8266_t* ESP8266)
 /*
  *
  */
-void ESP8266Handler( FallSensorDef* Fall )
+void ESP8266Handler( FALL_SENSOR_DEF* Fall )
 {
 	ESP8266_Update(&Fall->ESP8266);
 }

@@ -15,15 +15,16 @@
 #include "utils/uartstdio.h"
 #include "fallsensor.h"
 #include "init.h"
+
+#include "file.h"
 #include "wifi.h"
-#include "filesystem.h"
 
 
 #define RED_LED   GPIO_PIN_1
 #define BLUE_LED  GPIO_PIN_2
 #define GREEN_LED GPIO_PIN_3
 
-static FallSensorDef Fall;
+static FALL_SENSOR_DEF Fall;
 
 void Adc0_1_ISR(void)
 {
@@ -31,14 +32,34 @@ void Adc0_1_ISR(void)
 	// Clear the timer interrupt
 	ADCIntClear(ADC0_BASE,1);
 
-	ADCSequenceDataGet(ADC0_BASE, 1, &(Fall.amost.buff.values[Fall.amost.flgs.Active])[transfers]);
+	ADCSequenceDataGet(ADC0_BASE, 1, &Fall.amost.buff.active[transfers]);
 	transfers += 4;
-
 	if( (transfers)%AMOST_BUFFER_SIZE == 0 )
 	{
 		Fall.amost.flgs.Active ^= 1;
+		if( Fall.amost.flgs.Active )
+		{
+			Fall.amost.buff.toSave = Fall.amost.buff._0;
+			Fall.amost.buff.active = Fall.amost.buff._1;
+		}
+		else
+		{
+			Fall.amost.buff.toSave = Fall.amost.buff._1;
+			Fall.amost.buff.active = Fall.amost.buff._0;
+		}
+
 		Fall.flgs.IsReadyToSave = 1;
 		transfers = 0;
+
+		if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
+		{
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
+		}
+		else
+		{
+			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
+		}
+
 	}
 }
 
@@ -49,14 +70,7 @@ void Timer1AIntHandler(void)
 
 	ESP8266_TimeUpdate(&Fall.ESP8266,TIME_TIMER1A_INTERRUPT);
 
-	if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
-	{
-		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
-	}
-	else
-	{
-		GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
-	}
+
 
 }
 
@@ -74,7 +88,7 @@ int main(void)
 	while(1)
    	{
 
-   		FSHandler(&Fall);
+		FileSaveHandler(&Fall);
    		ESP8266Handler(&Fall);
 
    		if (UARTCharsAvail(UART1_BASE))

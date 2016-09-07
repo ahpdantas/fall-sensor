@@ -10,6 +10,6 @@
 
 #include "fallsensor.h"
 
-void init(FallSensorDef* Fall);
+void init(FALL_SENSOR_DEF* Fall);
 
 #endif /* INCLUDE_INIT_H_ */

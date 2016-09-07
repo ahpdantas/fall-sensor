@@ -1,71 +1,122 @@
 /*
- * file.c
+ * amost.c
  *
  *  Created on: 6 de set de 2016
  *      Author: andre
  */
-#include <stdlib.h>
+#include "file.h"
+
+#include "fallsensor.h"
 #include "fatfs/ff.h"
 #include "utils/uartstdio.h"
 #include "utils/ustdlib.h"
-#include "file.h"
+#include "queue.h"
+#include "config.h"
 
+#define NUMBER_OF_WRITE_CYCLES (TIME_AQUISITION *( AMOST_FREQUENCY/AMOST_BUFFER_SIZE ))
 #define FILENAME_SIZE 16
+#define FILE_ID_MAX 9999
 
-typedef struct
-{
-	char name[FILENAME_SIZE];
-	unsigned int size;
-}FILE_HEADER_DEF;
-
-typedef struct
-{
-	FIL fil;
-	FILE_HEADER_DEF att;
-}FILE_DEF;
-
-void getFilename(char* fileDst, unsigned int size )
-{
-	static unsigned int fileID = 0;
-
-	usnprintf(fileDst,size,"S%05d.txt",fileID);
-	fileID++;
-}
-
-FRESULT createFile(FD_FILE* File)
+FRESULT initVolume(FD_FAT_FS_DEF* FdFS)
 {
 	FRESULT result;
-	UINT bw;
 
-	if(*File == NULL)
-	{
-		*File = malloc(sizeof(FILE_DEF));
-	}
-
-	getFilename( ((FILE_DEF *)*File)->att.name, FILENAME_SIZE);
-	result = f_open(&((FILE_DEF *)*File)->fil, ((FILE_DEF *)*File)->att.name, FA_WRITE | FA_OPEN_ALWAYS );
+	result = f_mount( &FdFS->FatFs, "", 1);
 	if( result == FR_OK )
 	{
-		result = f_write(&((FILE_DEF *)*File)->fil, &((FILE_DEF *)*File)->att, sizeof(FILE_HEADER_DEF),&bw);
+		FdFS->FilesQueue = CreateQueue();
 	}
-
 	return result;
 }
 
-FRESULT writeFile(FD_FILE File, void* buff, UINT btw, UINT *bw)
+void getFilenameById(char* fileDst, unsigned int size, unsigned int Id )
 {
-	return f_write( &((FILE_DEF*)File)->fil, buff, btw, bw);
+	usnprintf(fileDst,size,"FD%04d.txt",Id);
 }
 
-FRESULT closeFile(FD_FILE* File)
+void createNewFilename(char* fileDst, unsigned int size, UINT *Id )
+{
+	*Id += 1;
+	if( *Id > FILE_ID_MAX )
+	{
+		*Id = 0;
+	}
+
+	getFilenameById(fileDst,size,*Id);
+}
+
+FRESULT openFile(FIL *File, UINT Id)
 {
 	FRESULT result;
-	result = f_close(&((FILE_DEF *)*File)->fil);
-	if( *File != NULL )
+	CHAR filename[FILENAME_SIZE];
+
+	getFilenameById(filename,FILENAME_SIZE,Id);
+	result = f_open( File, filename, FA_READ | FA_OPEN_EXISTING );
+
+	return result;
+}
+
+FRESULT createFile(FIL* File, UINT* Id )
+{
+	FRESULT result;
+	CHAR filename[FILENAME_SIZE];
+	UINT bw;
+
+	createNewFilename(filename, FILENAME_SIZE, Id);
+	result = f_open( File, filename, FA_WRITE | FA_OPEN_ALWAYS );
+	if( result == FR_OK )
 	{
-		free(*File);
-		*File = NULL;
+		UARTprintf(" %s openned with sucess.\n", filename );
+		result = f_write(File, filename, FILENAME_SIZE,&bw);
 	}
 
 	return result;
 }
+
+void FileSaveHandler(FALL_SENSOR_DEF *Fall)
+{
+	static FIL File;
+	static unsigned int FileId = 0;
+	static unsigned int numberOfWrites = 0;
+	FRESULT result;
+	UINT bw = 0;
+
+	if( !Fall->flgs.IsReadyToSave )
+		return;
+
+	Fall->flgs.IsReadyToSave = 0;
+
+	switch( Fall->state.save )
+	{
+		case OPEN_FILE:
+			result = createFile(&File, &FileId);
+			if( result == FR_OK )
+			{
+				Fall->state.save = WRITE_FILE;
+			}
+			else
+			{
+				UARTprintf("ERROR in createFile() - ERROR: %d\n", result);
+				break;
+			}
+		case WRITE_FILE:
+			result = f_write( &File, Fall->amost.buff.toSave, Fall->amost.buff.size, &bw);
+			if( result == FR_OK	)
+			{
+				numberOfWrites++;
+				if( numberOfWrites == NUMBER_OF_WRITE_CYCLES )
+				{
+					Fall->state.save = OPEN_FILE;
+					numberOfWrites = 0;
+					result = f_close(&File);
+					if( result == FR_OK )
+					{
+						Enqueue( Fall->FdFs.FilesQueue, FileId );
+					}
+				}
+			}
+			break;
+	}
+}
+
+

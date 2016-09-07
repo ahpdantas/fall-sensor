@@ -8,11 +8,11 @@
 #ifndef QUEUE_H_
 #define QUEUE_H_
 
-typedef QUEUE_DEF* QUEUE;
+typedef struct QUEUE_DEF* QUEUE;
 
-Queue Create();
-Enqueue(QUEUE q, void* Element);
-Dequeue(QUEUE q, void* Element);
+QUEUE CreateQueue();
+Enqueue(QUEUE q, unsigned int Element);
+Dequeue(QUEUE q, unsigned int* Element);
 Destroy(QUEUE q);
 
 #endif /* QUEUE_H_ */
