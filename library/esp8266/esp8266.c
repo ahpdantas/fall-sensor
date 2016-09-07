@@ -652,8 +652,7 @@ void CallConnectionCallbacks(ESP8266_t* ESP8266) {
     }
 }
 
-static
-void CallCallbacks(ESP8266_t* ESP8266) {
+static void CallCallbacks(ESP8266_t* ESP8266) {
     if (ESP8266->Flags.F.Call_DeviceReady && ESP8266->ActiveCommand == ESP8266_COMMAND_IDLE) {
         ESP8266->Flags.F.Call_DeviceReady = 0;
         ESP8266_Callback_DeviceReady(ESP8266);

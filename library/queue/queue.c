@@ -5,7 +5,7 @@
  *      Author: andre
  */
 #include <stdlib.h>
-#include "queue.h"
+#include "queue/queue.h"
 #include "utils/uartstdio.h"
 
 typedef struct NODE_DEF* NODE;
@@ -31,7 +31,7 @@ QUEUE CreateQueue()
 	q->back = NULL;
 	q->front = NULL;
 	q->size = 0;
-	return q;
+	return (QUEUE)q;
 }
 
 void Enqueue(QUEUE q, unsigned int value )

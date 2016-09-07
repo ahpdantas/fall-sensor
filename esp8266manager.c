@@ -4,15 +4,30 @@
  *  Created on: 6 de set de 2016
  *      Author: andre
  */
-#include "fallsensor.h"
+#include "inc/hw_ints.h"
+#include "inc/hw_memmap.h"
+#include "inc/hw_types.h"
+#include "driverlib/uart.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/timer.h"
 #include "esp8266/esp8266.h"
+#include "filemanager.h"
 #include "utils/uartstdio.h"
+
+#define TIME_TIMER1A_INTERRUPT 100 //ms
+#define TIMER1_INTERRUPT_FREQUENCY (1000/TIME_TIMER1A_INTERRUPT)
+
+#define TIMEOUT_RECONNECTION 300
 
 typedef enum
 {
 	OPEN_CONNECTION,
-	SEND_DATA,
-	CLOSE_CONNECTION
+	WAITING_CONNECTION,
+	REQUEST_SEND_DATA,
+	SENDING_DATA,
+	WAIT_RECONNECT,
+	CLOSE_CONNECTION,
+	WAITING_CLOSE
 }ConnState;
 
 typedef struct{
@@ -20,84 +35,77 @@ typedef struct{
 	struct {
 		ConnState conn;
 	}state;
+	struct {
+		unsigned int _100MS;
+	}flg;
+
 }ESP8266_MANAGER_DEF;
-/*
-void SendSensorsData()
+
+static ESP8266_MANAGER_DEF ESP8266;
+
+void Timer1AIntHandler(void)
 {
-	ESP8266_Result_t result = ESP_OK;
-	static ConnectionData conn = { .state = OPEN_CONNECTION };
-
-	if( !filesAvailable )
-		return;
-
-	ESP8266_WaitReady(&ESP8266);
-
-	switch( conn.state )
-	{
-	case OPEN_CONNECTION:
-		ESP8266_StartClientConnection(&ESP8266, "sensor", "192.168.0.105", 5000, &conn);
-		if( (result = ESP8266_IsReady(&ESP8266)) == ESP_OK  )
-		{
-			conn.state = SEND_DATA;
-		}
-		break;
-	//implemented using user callbacks
-	case SEND_DATA:
-		result = ESP8266_RequestSendData(&ESP8266, &ESP8266.Connection[0]);
-		break;
-	case CLOSE_CONNECTION:
-		result = ESP8266_CloseConnection(&ESP8266,&ESP8266.Connection[0]);
-		if( result == ESP_OK )
-		{
-			conn.state = OPEN_CONNECTION;
-		}
-		break;
-
-	}
+	// Clear the timer interrupt
+	TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+	ESP8266_TimeUpdate(&ESP8266.dev,TIME_TIMER1A_INTERRUPT);
+	ESP8266.flg._100MS = 1;
 }
-*/
-void initESP8266(ESP8266_MANAGER* ESP8266)
+
+void initTimer1()
 {
-	ESP8266_MANAGER_DEF *ESP = NULL;
+	unsigned long ulPeriod = 0;
 
-	ESP = malloc(sizeof(ESP8266_MANAGER_DEF));
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
+	TimerConfigure(TIMER1_BASE, TIMER_CFG_32_BIT_PER);
 
-	ESP->state.conn = OPEN_CONNECTION;
+	ulPeriod = ( SysCtlClockGet() / TIMER1_INTERRUPT_FREQUENCY);
+	TimerLoadSet(TIMER1_BASE, TIMER_A, ulPeriod -1);
 
-	ESP8266_Init(&ESP->dev,115200);
+	TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+	IntEnable(INT_TIMER1A);
+
+	TimerEnable(TIMER1_BASE,TIMER_A);
+
+}
+
+void initESP8266()
+{
+	initTimer1();
+
+	ESP8266.state.conn = OPEN_CONNECTION;
+
+	ESP8266_Init(&ESP8266.dev,115200);
 
 	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
+	ESP8266_WaitReady(&ESP8266.dev);
 
-	ESP8266_SetAutoConnect(&ESP->dev,ESP8266_AutoConnect_Off);
-
-	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
-
-	ESP8266_SetMode(&ESP->dev, ESP8266_Mode_STA_AP);
+	ESP8266_SetAutoConnect(&ESP8266.dev,ESP8266_AutoConnect_Off);
 
 	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
+	ESP8266_WaitReady(&ESP8266.dev);
+
+	ESP8266_SetMode(&ESP8266.dev, ESP8266_Mode_STA_AP);
+
+	/* Wait till finish */
+	ESP8266_WaitReady(&ESP8266.dev);
 
 	/* Get a list of all stations */
-	ESP8266_ListWifiStations(&ESP->dev);
+	ESP8266_ListWifiStations(&ESP8266.dev);
 
 	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
+	ESP8266_WaitReady(&ESP8266.dev);
 
 	/* Connect to wifi and save settings */
-	ESP8266_WifiConnect(&ESP->dev, "ANDRE_WIFI", "gr68ci49");
+	ESP8266_WifiConnect(&ESP8266.dev, "ANDRE_WIFI", "gr68ci49");
 
 	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
+	ESP8266_WaitReady(&ESP8266.dev);
 
 	/* Get connected devices */
-	ESP8266_WifiGetConnected(&ESP->dev);
+	ESP8266_WifiGetConnected(&ESP8266.dev);
 
 	/* Wait till finish */
-	ESP8266_WaitReady(&ESP->dev);
-
-	*ESP8266 = (ESP_MANAGER)ESP;
+	ESP8266_WaitReady(&ESP8266.dev);
 
 	UARTprintf("Initialization completed\n");
 
@@ -106,9 +114,51 @@ void initESP8266(ESP8266_MANAGER* ESP8266)
 /*
  *
  */
-void ESP8266Handler( ESP8266_MANAGER ESP8266 )
+void ESP8266Handler()
 {
-	//ESP8266_Update(&Fall->ESP8266);
+	ESP8266_Result_t result;
+	static unsigned int timeToReconnect = 0;
+
+	ESP8266_Update(&ESP8266.dev);
+
+	if( !IsThereFileToSend() )return;
+	if( (result = ESP8266_IsReady(&ESP8266.dev)) == ESP_BUSY )return;
+
+
+
+	switch( ESP8266.state.conn )
+	{
+		case OPEN_CONNECTION:
+			ESP8266_StartClientConnection(&ESP8266.dev, "fdamost", "192.168.0.105", 5000, &ESP8266.state.conn);
+			ESP8266.state.conn = WAITING_CONNECTION;
+			break;
+		case WAITING_CONNECTION:
+			break;
+		case SENDING_DATA:
+			break;
+		case WAITING_CLOSE:
+			break;
+		case WAIT_RECONNECT:
+			if( ESP8266.flg._100MS )
+			{
+				ESP8266.flg._100MS = 0;
+				timeToReconnect++;
+				if( timeToReconnect == TIMEOUT_RECONNECTION )
+				{
+					timeToReconnect = 0;
+					ESP8266.state.conn = OPEN_CONNECTION;
+				}
+			}
+			break;
+
+	}
+
+
+	if (UARTCharsAvail(UART1_BASE))
+	{
+		UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE));
+	}
+
 }
 
 /************************************/
@@ -147,7 +197,7 @@ void ESP8266_Callback_WifiGotIP(ESP8266_t* ESP8266) {
 void ESP8266_Callback_WifiIPSet(ESP8266_t* ESP8266) {
 	/* We have STA IP set (IP set by router we are connected to) */
 	UARTprintf("We have valid IP address: %d.%d.%d.%d\r\n", ESP8266->STAIP[0], ESP8266->STAIP[1], ESP8266->STAIP[2], ESP8266->STAIP[3]);
-}
+}//
 
 void ESP8266_Callback_DHCPTimeout(ESP8266_t* ESP8266) {
 	UARTprintf("DHCP timeout!\r\n");
@@ -174,80 +224,57 @@ void ESP8266_Callback_ClientConnectionConnected(ESP8266_t* ESP8266, ESP8266_Conn
 	UARTprintf("Client connected to server! Connection number: %s\r\n", Connection->Name);
 
 	/* We are connected to server, request to sent header data to server */
-	//ESP8266_RequestSendData(ESP8266, Connection);
+	*((ConnState *)(Connection->UserParameters)) = SENDING_DATA;
+	ESP8266_RequestSendData(ESP8266, Connection);
+
 }
 
 /* Called when client connection fails to server */
 void ESP8266_Callback_ClientConnectionError(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	/* Fail with connection to server */
 	UARTprintf("An error occured when trying to connect on connection: %d\r\n", Connection->Number);
+	*((ConnState *)(Connection->UserParameters)) =  WAIT_RECONNECT;
 }
 
-//#define MAX_BYTE_READ 512
 /* Called when data are ready to be sent to server */
 uint16_t ESP8266_Callback_ClientConnectionSendData(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection, char* Buffer, uint16_t max_buffer_size) {
-	//FALL_SENSOR_DEF *f = (FALL_SENSOR_DEF *)Connection[0]->UserParameters;
+	//FileReadHandler(NULL,0);
+	UARTprintf("Sending data to the client!\r\n");
 
-
+	return FileReadHandler(Buffer, max_buffer_size);
+	/* Format data to sent to server */
 	/*
-	static FileState fileState = OPEN_FILE;
-	static FIL Fread;
-	static FRESULT re;
-	UINT br = 0;
-
-	// Format data to sent to server
-	switch(fileState)
-	{
-	case OPEN_FILE:
-		usnprintf(FileName,FILE_NAME_BUFFER_SIZE,"S%05d.txt",fileToSave);
-		re = f_open(&Fread, FileName, FA_READ);
-		if( re == FR_OK )
-		{
-			UARTprintf("Openning the file: %s to send information", FileName );
-			fileState = READ_FILE;
-		}
-		else
-		{
-			UARTprintf("It was not possible to open the file: %s - ERROR: %d", FileName, re );
-
-		}
-	case READ_FILE:
-		re = f_read(&Fread,Buffer,MAX_BYTE_READ,&br);
-		if( re == FR_OK && !br )
-		{
-			fileState = CLOSE_FILE;
-		}
-		break;
-	case CLOSE_FILE:
-		re = f_close(&Fread);
-		if( re == FR_OK )
-		{
-			UARTprintf("File %s closed with success.", FileName);
-			fileState = OPEN_FILE;
-			filesAvailable--;
-			((ConnectionData *)Connection->UserParameters)->state = CLOSE_CONNECTION;
-		}
-		else
-		{
-			UARTprintf("It was not possible to close the file: %s - ERROR: %d", FileName, re);
-		}
-		break;
-	}
-
-	return br;*/
+	sprintf(Buffer, "GET / HTTP/1.1\r\n");
+	strcat(Buffer, "Host: stm32f4-discovery.com\r\n");
+	strcat(Buffer, "Connection: close\r\n");
+	strcat(Buffer, "\r\n");
+	*/
+	/* Return length of buffer */
+	//return strlen(Buffer);
 }
 
 /* Called when data are send successfully */
 void ESP8266_Callback_ClientConnectionDataSent(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	UARTprintf("Data successfully sent as client!\r\n");
-	//((ConnectionData *)Connection->UserParameters)->state = CLOSE_CONNECTION;
-	//fileToSave++;
+	if( IsThereFileToSend() )
+	{
+		*((ConnState *)(Connection->UserParameters)) = SENDING_DATA;
+		ESP8266_RequestSendData(ESP8266, Connection);
+	}
+	else
+	{
+		*((ConnState *)(Connection->UserParameters)) =  WAITING_CLOSE;
+		ESP8266_CloseConnection(ESP8266, Connection);
+	}
+
 }
 
 /* Called when error returned trying to sent data */
 void ESP8266_Callback_ClientConnectionDataSentError(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	UARTprintf("Error while sending data on connection %d!\r\n", Connection->Number);
-	//((ConnectionData *)Connection->UserParameters)->state = CLOSE_CONNECTION;
+
+	*((ConnState *)(Connection->UserParameters)) =  WAITING_CLOSE;
+	ESP8266_CloseConnection(ESP8266, Connection);
 }
 
 uint32_t time = 0;
@@ -273,12 +300,18 @@ void ESP8266_Callback_ClientConnectionClosed(ESP8266_t* ESP8266, ESP8266_Connect
 		Connection->Number, Connection->TotalBytesReceived, Connection->ContentLength
 	);
 
-	//((ConnectionData *)Connection->UserParameters)->state = CLOSE_CONNECTION;
+	if ( *((ConnState *)(Connection->UserParameters)) == WAITING_CONNECTION )
+	{
+		*((ConnState *)(Connection->UserParameters)) = WAIT_RECONNECT;
+	}
+	else
+	{
+		*((ConnState *)(Connection->UserParameters)) = OPEN_CONNECTION;
+	}
 }
 
 /* Called when timeout is reached on connection to server */
 void ESP8266_Callback_ClientConnectionTimeout(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	UARTprintf("Timeout reached on connection: %d\r\n", Connection->Number);
-	//((ConnectionData *)Connection->UserParameters)->state = CLOSE_CONNECTION;
 }
 

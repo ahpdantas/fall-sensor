@@ -27,8 +27,6 @@ typedef struct{
 }BUFFER_DEF;
 
 typedef struct{
-	FILE_MANAGER FM;		/* FatFs work area needed for each volume */
-	ESP8266_MANAGER ESP8266;
 	BUFFER_DEF amost;
 	struct{
 		unsigned int IsReadyToSave:1;

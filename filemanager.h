@@ -8,10 +8,10 @@
 #ifndef FILEMANAGER_H_
 #define FILEMANAGER_H_
 
-typedef struct FILE_MANAGER_DEF * FILE_MANAGER;
+int initVolume();
 
-int initVolume(FILE_MANAGER *FileManager);
-void FileWriteHandler(FILE_MANAGER FileManager, char* Buffer, unsigned int bufferSize );
-int FileReadHandler(FILE_MANAGER FileManager, char* Buffer, unsigned int bufferSize);
+int IsThereFileToSend();
+void FileWriteHandler(char* Buffer, unsigned int bufferSize );
+int FileReadHandler(char* Buffer, unsigned int bufferSize);
 
 #endif /* FILEMANAGER_H_ */

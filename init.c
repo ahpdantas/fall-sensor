@@ -42,23 +42,6 @@ void initTimer0()
 	TimerEnable(TIMER0_BASE, TIMER_A);
 }
 
-void initTimer1()
-{
-	unsigned long ulPeriod = 0;
-
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
-	TimerConfigure(TIMER1_BASE, TIMER_CFG_32_BIT_PER);
-
-	ulPeriod = ( SysCtlClockGet() / TIMER1_INTERRUPT_FREQUENCY);
-	TimerLoadSet(TIMER1_BASE, TIMER_A, ulPeriod -1);
-
-	TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
-	IntEnable(INT_TIMER1A);
-
-	TimerEnable(TIMER1_BASE,TIMER_A);
-
-}
-
 void initADC0()
 {
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_ADC0);
@@ -116,8 +99,8 @@ void init(FALL_SENSOR_DEF* Fall)
 	initTimer1();
 	initRTC();
 	initUART1();
-	initVolume(&Fall->FM);
-	initESP8266(&Fall->ESP8266);
+	initVolume();
+	initESP8266();
 
 }
 

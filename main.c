@@ -45,18 +45,6 @@ void Adc0_1_ISR(void)
 	}
 }
 
-void Timer1AIntHandler(void)
-{
-	// Clear the timer interrupt
-	TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
-
-	ESP8266_TimeUpdate(&Fall.ESP8266,TIME_TIMER1A_INTERRUPT);
-
-
-
-}
-
-
 /*---------------------------------------------------------*/
 /* User Provided Timer Function for FatFs module           */
 /*---------------------------------------------------------*/
@@ -72,17 +60,10 @@ int main(void)
 
 		if( Fall.flgs.IsReadyToSave )
 		{
-			FileWriteHandler(Fall.FM, (char*)Fall.amost.buff.toSave, Fall.amost.buff.size);
+			FileWriteHandler((char*)Fall.amost.buff.toSave, Fall.amost.buff.size);
 			Fall.flgs.IsReadyToSave = 0;
 		}
-		/*
-   		ESP8266Handler(&Fall);
-
-   		if (UARTCharsAvail(UART1_BASE))
-   		{
-   			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE));
-   		}*/
-
+		ESP8266Handler();
 	}
 }
 
