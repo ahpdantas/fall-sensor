@@ -18,9 +18,10 @@
 #include "utils/uartstdio.h"
 #include "config.h"
 #include "fallsensor.h"
-#include "wifi.h"
 #include "rtc.h"
-#include "file.h"
+
+#include "esp8266manager.h"
+#include "filemanager.h"
 
 void initGpios()
 {
@@ -48,7 +49,7 @@ void initTimer1()
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
 	TimerConfigure(TIMER1_BASE, TIMER_CFG_32_BIT_PER);
 
-	ulPeriod = ( SysCtlClockGet() / FREQ_TIMER1_INTERRUPT);
+	ulPeriod = ( SysCtlClockGet() / TIMER1_INTERRUPT_FREQUENCY);
 	TimerLoadSet(TIMER1_BASE, TIMER_A, ulPeriod -1);
 
 	TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
@@ -66,9 +67,9 @@ void initADC0()
 
 	ADCSequenceConfigure(ADC0_BASE, 1, ADC_TRIGGER_TIMER, 0);
 	ADCSequenceStepConfigure(ADC0_BASE, 1, 0, ADC_CTL_CH0);
-	ADCSequenceStepConfigure(ADC0_BASE, 1, 1, ADC_CTL_CH0);
+	ADCSequenceStepConfigure(ADC0_BASE, 1, 1, ADC_CTL_CH1);
 	ADCSequenceStepConfigure(ADC0_BASE, 1, 2, ADC_CTL_CH0);
-	ADCSequenceStepConfigure(ADC0_BASE, 1, 3, ADC_CTL_CH0 | ADC_CTL_IE | ADC_CTL_END);
+	ADCSequenceStepConfigure(ADC0_BASE, 1, 3, ADC_CTL_CH1 | ADC_CTL_IE | ADC_CTL_END);
 	ADCSequenceEnable(ADC0_BASE, 1);
 
 	ADCIntEnable(ADC0_BASE,1);
@@ -102,8 +103,6 @@ void initUART1()
 void init(FALL_SENSOR_DEF* Fall)
 {
 	//configure the system clock to run at 40MHz
-	Fall->state.save = OPEN_FILE;
-	Fall->state.send = OPEN_CONNECTION;
 	Fall->amost.flgs.Active = 0;
 	Fall->amost.buff.active = Fall->amost.buff._0;
 	Fall->amost.buff.toSave = Fall->amost.buff._1;
@@ -117,7 +116,7 @@ void init(FALL_SENSOR_DEF* Fall)
 	initTimer1();
 	initRTC();
 	initUART1();
-	initVolume(&Fall->FdFs);
+	initVolume(&Fall->FM);
 	initESP8266(&Fall->ESP8266);
 
 }

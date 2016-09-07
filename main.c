@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include "inc/hw_ints.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_types.h"
@@ -16,13 +13,8 @@
 #include "fallsensor.h"
 #include "init.h"
 
-#include "file.h"
-#include "wifi.h"
-
-
-#define RED_LED   GPIO_PIN_1
-#define BLUE_LED  GPIO_PIN_2
-#define GREEN_LED GPIO_PIN_3
+#include "esp8266manager.h"
+#include "filemanager.h"
 
 static FALL_SENSOR_DEF Fall;
 
@@ -50,16 +42,6 @@ void Adc0_1_ISR(void)
 
 		Fall.flgs.IsReadyToSave = 1;
 		transfers = 0;
-
-		if(GPIOPinRead(GPIO_PORTF_BASE, GPIO_PIN_2) )
-		{
-			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, 0);
-		}
-		else
-		{
-			GPIOPinWrite(GPIO_PORTF_BASE, RED_LED| BLUE_LED|GREEN_LED, BLUE_LED);
-		}
-
 	}
 }
 
@@ -88,13 +70,18 @@ int main(void)
 	while(1)
    	{
 
-		FileSaveHandler(&Fall);
+		if( Fall.flgs.IsReadyToSave )
+		{
+			FileWriteHandler(Fall.FM, (char*)Fall.amost.buff.toSave, Fall.amost.buff.size);
+			Fall.flgs.IsReadyToSave = 0;
+		}
+		/*
    		ESP8266Handler(&Fall);
 
    		if (UARTCharsAvail(UART1_BASE))
    		{
    			UARTCharPut(UART3_BASE, UARTCharGet(UART1_BASE));
-   		}
+   		}*/
 
 	}
 }
