@@ -21,10 +21,17 @@ static FALL_SENSOR_DEF Fall;
 void Adc0_1_ISR(void)
 {
 	static unsigned int transfers = 0;
+	unsigned int i = 0;
+	unsigned long AdcSamples[4];
 	// Clear the timer interrupt
 	ADCIntClear(ADC0_BASE,1);
 
-	ADCSequenceDataGet(ADC0_BASE, 1, &Fall.amost.buff.active[transfers]);
+	ADCSequenceDataGet(ADC0_BASE, 1, AdcSamples );
+	for( i = 0; i < 4; i++)
+	{
+		Fall.amost.buff.active[transfers+i] = (unsigned short)AdcSamples[i];
+	}
+
 	transfers += 4;
 	if( (transfers)%AMOST_BUFFER_SIZE == 0 )
 	{

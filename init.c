@@ -89,7 +89,7 @@ void init(FALL_SENSOR_DEF* Fall)
 	Fall->amost.flgs.Active = 0;
 	Fall->amost.buff.active = Fall->amost.buff._0;
 	Fall->amost.buff.toSave = Fall->amost.buff._1;
-	Fall->amost.buff.size = sizeof(*Fall->amost.buff._0)*sizeof(AMOST_BUFFER_SIZE);
+	Fall->amost.buff.size = sizeof(*Fall->amost.buff._0)*AMOST_BUFFER_SIZE;
 	Fall->flgs.IsReadyToSave = 0;
 
 	SysCtlClockSet(SYSCTL_SYSDIV_5|SYSCTL_USE_PLL|SYSCTL_XTAL_16MHZ|SYSCTL_OSC_MAIN);

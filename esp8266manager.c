@@ -116,15 +116,12 @@ void initESP8266()
  */
 void ESP8266Handler()
 {
-	ESP8266_Result_t result;
 	static unsigned int timeToReconnect = 0;
 
 	ESP8266_Update(&ESP8266.dev);
 
 	if( !IsThereFileToSend() )return;
-	if( (result = ESP8266_IsReady(&ESP8266.dev)) == ESP_BUSY )return;
-
-
+	if( ESP8266_IsReady(&ESP8266.dev) == ESP_BUSY )return;
 
 	switch( ESP8266.state.conn )
 	{
@@ -152,7 +149,6 @@ void ESP8266Handler()
 			break;
 
 	}
-
 
 	if (UARTCharsAvail(UART1_BASE))
 	{
@@ -238,25 +234,14 @@ void ESP8266_Callback_ClientConnectionError(ESP8266_t* ESP8266, ESP8266_Connecti
 
 /* Called when data are ready to be sent to server */
 uint16_t ESP8266_Callback_ClientConnectionSendData(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection, char* Buffer, uint16_t max_buffer_size) {
-	//FileReadHandler(NULL,0);
-	UARTprintf("Sending data to the client!\r\n");
-
-	return FileReadHandler(Buffer, max_buffer_size);
 	/* Format data to sent to server */
-	/*
-	sprintf(Buffer, "GET / HTTP/1.1\r\n");
-	strcat(Buffer, "Host: stm32f4-discovery.com\r\n");
-	strcat(Buffer, "Connection: close\r\n");
-	strcat(Buffer, "\r\n");
-	*/
-	/* Return length of buffer */
-	//return strlen(Buffer);
+	return FileReadHandler(Buffer, max_buffer_size);
 }
 
 /* Called when data are send successfully */
 void ESP8266_Callback_ClientConnectionDataSent(ESP8266_t* ESP8266, ESP8266_Connection_t* Connection) {
 	UARTprintf("Data successfully sent as client!\r\n");
-	if( IsThereFileToSend() )
+	if( IsThereFileToSend() || !ReadingFinished() )
 	{
 		*((ConnState *)(Connection->UserParameters)) = SENDING_DATA;
 		ESP8266_RequestSendData(ESP8266, Connection);

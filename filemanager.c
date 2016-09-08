@@ -4,6 +4,7 @@
  *  Created on: 6 de set de 2016
  *      Author: andre
  */
+#include <string.h>
 #include "fatfs/ff.h"
 #include "queue/queue.h"
 #include "utils/uartstdio.h"
@@ -21,6 +22,12 @@ typedef enum
 	WRITE_FILE,
 	CLOSE_FILE
 }FileState;
+
+typedef struct
+{
+	CHAR filename[FILENAME_SIZE];
+	unsigned int size;
+}FILE_HEADER_DEF;
 
 typedef struct
 {
@@ -52,6 +59,7 @@ int initVolume()
 
 void getFilenameById(char* fileDst, unsigned int size, unsigned int Id )
 {
+	memset(fileDst,0,size);
 	usnprintf(fileDst,size,"FD%04d.txt",Id);
 }
 
@@ -76,17 +84,18 @@ FRESULT openFile(FIL *File, UINT Id)
 	return result;
 }
 
-FRESULT createFile(FIL* File, UINT* Id )
+FRESULT createFile(FIL* File, UINT* Id, unsigned int size )
 {
 	FRESULT result;
-	CHAR filename[FILENAME_SIZE];
+	FILE_HEADER_DEF header;
 	UINT bw;
 
-	createNewFilename(filename, FILENAME_SIZE, Id);
-	result = f_open( File, filename, FA_WRITE | FA_OPEN_ALWAYS );
+	createNewFilename(header.filename, sizeof(*header.filename)*FILENAME_SIZE, Id);
+	header.size =  size;
+	result = f_open( File, header.filename, FA_WRITE | FA_CREATE_ALWAYS );
 	if( result == FR_OK )
 	{
-		result = f_write(File, filename, FILENAME_SIZE,&bw);
+		result = f_write(File, &header, sizeof(FILE_HEADER_DEF),&bw);
 	}
 	return result;
 }
@@ -96,21 +105,32 @@ int IsThereFileToSend()
 	return IsEmpty( fm.FilesQueue );
 }
 
-int FileReadHandler(char* buffer, unsigned int bufferSize)
+int ReadingFinished()
+{
+	if( fm.state.read == READ_FILE )
+		return 0;
+	else
+		return 1;
+}
+
+int FileReadHandler(char* buffer, unsigned int bufferSize )
 {
 	static FIL File;
 	static unsigned int FileId = 0;
+	static unsigned int bs = 0; //bytes sended
 	FRESULT result;
 	UINT br = 0;
+
 
 	switch( fm.state.read )
 	{
 		case OPEN_FILE:
+			Dequeue(fm.FilesQueue, &FileId);
 			result = openFile(&File, FileId);
 			if( result == FR_OK )
 			{
 				UARTprintf("File %d oppened with sucess.\n", FileId );
-				UARTprintf("writing...\n");
+				UARTprintf("sending...\n");
 				fm.state.read = READ_FILE;
 			}
 			else
@@ -120,11 +140,15 @@ int FileReadHandler(char* buffer, unsigned int bufferSize)
 			}
 		case READ_FILE:
 			result = f_read(&File,buffer,bufferSize,&br);
-			if( result == FR_OK && br == 0 )
+			if( result == FR_OK )
 			{
-				Dequeue(fm.FilesQueue, &FileId);
-				fm.state.read = OPEN_FILE;
-				f_close(&File);
+				bs += br;
+				if( bs == File.fsize )
+				{
+					bs = 0;
+					fm.state.read = OPEN_FILE;
+					f_close(&File);
+				}
 			}
 			break;
 	}
@@ -142,7 +166,7 @@ void FileWriteHandler(char* buffer, unsigned int bufferSize )
 	switch( fm.state.write )
 	{
 		case OPEN_FILE:
-			result = createFile(&File, &FileId);
+			result = createFile(&File, &FileId, NUMBER_OF_WRITE_CYCLES*bufferSize );
 			if( result == FR_OK )
 			{
 				UARTprintf("File %d oppened with sucess.\n", FileId );
@@ -170,6 +194,12 @@ void FileWriteHandler(char* buffer, unsigned int bufferSize )
 						Enqueue( fm.FilesQueue, FileId );
 					}
 				}
+			}
+			else
+			{
+				UARTprintf("File write ERROR: %d\n", result );
+				fm.state.write = OPEN_FILE;
+				numberOfWrites = 0;
 			}
 			break;
 	}

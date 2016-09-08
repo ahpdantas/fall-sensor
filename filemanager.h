@@ -11,7 +11,8 @@
 int initVolume();
 
 int IsThereFileToSend();
+int ReadingFinished();
 void FileWriteHandler(char* Buffer, unsigned int bufferSize );
-int FileReadHandler(char* Buffer, unsigned int bufferSize);
+int FileReadHandler(char* Buffer, unsigned int bufferSize );
 
 #endif /* FILEMANAGER_H_ */

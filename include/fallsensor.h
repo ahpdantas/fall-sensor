@@ -14,10 +14,10 @@
 
 typedef struct{
 	struct{
-		unsigned long _0[AMOST_BUFFER_SIZE];
-		unsigned long _1[AMOST_BUFFER_SIZE];
-		unsigned long *active;
-		unsigned long *toSave;
+		unsigned short _0[AMOST_BUFFER_SIZE];
+		unsigned short _1[AMOST_BUFFER_SIZE];
+		unsigned short *active;
+		unsigned short *toSave;
 		unsigned int size;
 	}buff;
 	struct{

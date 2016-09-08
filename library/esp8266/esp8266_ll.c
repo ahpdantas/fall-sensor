@@ -28,6 +28,7 @@
 #include "inc/hw_types.h"
 #include "driverlib/gpio.h"
 #include "driverlib/uart.h"
+#include "driverlib/interrupt.h"
 #include "esp8266_ll.h"
 
 /**************************************************************************/
